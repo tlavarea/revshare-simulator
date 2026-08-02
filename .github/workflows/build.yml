@@ -36,10 +36,17 @@ jobs:
         run: ./mvnw -B verify
 
       # Proves the fixture still reaches the states the rules are about. BrokerageSeedTest
-      # asserts the bands; this publishes the actual figures into the run log so a drift in
-      # the generated data is visible in the diff between two builds.
+      # asserts the bands; this publishes the actual figures into the run summary so drift
+      # in the generated data is visible by diffing two builds.
+      #
+      # Runs the shaded jar `verify` just produced rather than `mvn exec:java`, which also
+      # checks that the distributable artifact actually works. (`-pl seed-generator` would
+      # need `-am`, or an `install`, to resolve domain-core from the reactor.)
       - name: Generate seed data summary
         run: |
-          ./mvnw -B -q -pl seed-generator exec:java \
-            -Dexec.mainClass=com.revshare.seed.SeedGeneratorCli \
-            -Dexec.args="--summary-only" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '## Synthetic seed data'
+            echo '```'
+            java -jar seed-generator/target/seed-generator-*-cli.jar --summary-only
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
