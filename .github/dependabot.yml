@@ -10,6 +10,25 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Two pins here are deliberate project constraints rather than neglect, so Dependabot
+    # is told to stop reopening them. Everything else, including majors on any other
+    # dependency, still raises a PR.
+    ignore:
+      # Spring Boot stays on 3.x. It is the stack this project deliberately targets, and
+      # the root POM's enforcer caps Java at [21,25) for the same reason: 3.5 supports
+      # JDK 17-24 and cannot read newer class files. A 4.x bump would also swap Jackson 2
+      # for Jackson 3 underneath seed-generator's ObjectMapper.
+      # Revisit only alongside a decision to move the whole project to Spring Boot 4.
+      - dependency-name: "org.springframework.boot:spring-boot-dependencies"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.springframework.boot:spring-boot-maven-plugin"
+        update-types: ["version-update:semver-major"]
+
+      # Testcontainers 2.x is a breaking rewrite, and nothing consumes this BOM yet - the
+      # integration tests arrive with commission-service and reporting-service. Adopt 2.x
+      # when writing those, rather than migrating tests that do not exist.
+      - dependency-name: "org.testcontainers:testcontainers-bom"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
