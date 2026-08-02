@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw *)",
+      "Bash(mvn *)",
+      "Bash(mvnw *)",
+      "Bash(java *)",
+      "Bash(javac *)",
+      "Bash(jar *)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(git stash *)",
+      "Bash(git tag *)",
+      "Bash(git remote *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git rebase *)",
+      "Bash(git rev-parse *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git worktree *)",
+      "Bash(gh *)",
+      "Bash(docker *)",
+      "Bash(docker-compose *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(mkdir *)",
+      "Bash(for *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(echo *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Bash(jq *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "mcp__context7__*",
+      "mcp__docker__*",
+      "mcp__mcp-registry__*"
+    ],
+    "ask": [
+      "Bash(git reset *)",
+      "Bash(git clean *)",
+      "Bash(git restore *)",
+      "Bash(rm *)"
+    ],
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf .)",
+      "Bash(sudo *)",
+      "Bash(chmod 777 *)",
+      "Bash(eval *)",
+      "Bash(ssh *)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Read(./**/*.p12)",
+      "Read(./**/*.keystore)",
+      "Read(./**/*.jks)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./mvnw -q spotless:apply 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.revshare</groupId>
+    <artifactId>revshare-simulator</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>domain-core</artifactId>
+  <name>domain-core</name>
+  <description>
+    The hexagonal core: domain model, domain services, and ports. Framework-free by
+    construction - the only compile-scoped dependency permitted in this module is the JDK.
+    Everything Spring, JPA, Kafka, or Jackson lives in an adapter module outside this one.
+  </description>
+
+  <dependencies>
+    <!--
+      Intentionally empty at compile scope. If you find yourself wanting to add a
+      dependency here, the thing you are modelling probably belongs in an adapter.
+      Test-scoped JUnit/AssertJ are inherited from the parent POM.
+    -->
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        Enforce the "framework-free" claim mechanically rather than by convention, so
+        the architectural boundary survives contact with future contributors.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>enforce-framework-free-core</id>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <searchTransitive>true</searchTransitive>
+                  <excludes>
+                    <exclude>org.springframework*:*</exclude>
+                    <exclude>jakarta.persistence:*</exclude>
+                    <exclude>org.hibernate*:*</exclude>
+                    <exclude>com.fasterxml.jackson*:*</exclude>
+                    <exclude>org.apache.kafka:*</exclude>
+                  </excludes>
+                  <includes>
+                    <!-- ...except where they arrive only for tests. -->
+                    <include>*:*:*:*:test</include>
+                  </includes>
+                  <message>
+                    domain-core is the framework-free hexagonal core. Persistence,
+                    messaging, and serialization concerns belong in an adapter module.
+                  </message>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

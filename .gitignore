@@ -1,0 +1,26 @@
+target/
+build/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+.DS_Store
+*.log
+
+.env
+.env.local
+
+### Generated seed data (reproducible from a seed value; not source of truth) ###
+/seed-data/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

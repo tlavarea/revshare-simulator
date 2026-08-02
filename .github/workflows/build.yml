@@ -1,0 +1,45 @@
+name: Build and Test
+
+# Unlike auth-lava, this repo is a single Maven reactor rather than a backend/frontend
+# monorepo, so there is nothing to path-filter: any source change affects the one build.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Java 21, not 25. Spring Boot 3.5 supports 17-24, and the root POM's enforcer rule
+      # fails the build outside that range rather than letting it break later in a
+      # confusing place.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5.6.0
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+          cache-dependency-path: pom.xml
+
+      # Spotless is bound to `compile` as `apply`, so a local build reformats silently.
+      # That would let unformatted code reach main unnoticed, so CI checks explicitly and
+      # before the build, giving a fast, unambiguous failure.
+      - name: Check formatting
+        run: ./mvnw -B spotless:check
+
+      - name: Build and test
+        run: ./mvnw -B verify
+
+      # Proves the fixture still reaches the states the rules are about. BrokerageSeedTest
+      # asserts the bands; this publishes the actual figures into the run log so a drift in
+      # the generated data is visible in the diff between two builds.
+      - name: Generate seed data summary
+        run: |
+          ./mvnw -B -q -pl seed-generator exec:java \
+            -Dexec.mainClass=com.revshare.seed.SeedGeneratorCli \
+            -Dexec.args="--summary-only" >> "$GITHUB_STEP_SUMMARY"
