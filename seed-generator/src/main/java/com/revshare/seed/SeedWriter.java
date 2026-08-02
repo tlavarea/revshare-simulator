@@ -39,7 +39,10 @@ public final class SeedWriter {
                 // ISO-8601 strings, not epoch numbers. The file is meant to be read by a
                 // human deciding whether the fixture looks right.
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+                // Omit nulls, so an agent who has not left carries no `terminatedOn` key at
+                // all rather than an explicit null. setSerializationInclusion is deprecated
+                // in Jackson 2.19; this is the supported replacement.
+                .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
                 .enable(SerializationFeature.INDENT_OUTPUT);
     }
 
