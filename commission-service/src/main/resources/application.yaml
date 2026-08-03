@@ -2,23 +2,6 @@ spring:
   application:
     name: commission-service
 
-  aop:
-    # Proxy services through their interface with a JDK dynamic proxy, rather than by
-    # subclassing them with CGLIB.
-    #
-    # This has to be set explicitly. Spring Boot defaults it to true, which forces class-based
-    # proxying whether or not a bean implements an interface — so declaring an interface is
-    # necessary but on its own changes nothing. Verified: before this line, both services came
-    # back as ...$$SpringCGLIB$$0 despite both implementing interfaces.
-    #
-    # CGLIB proxies subclass the target, so they silently fail to advise a final class or a
-    # final method, and generate a class at runtime per proxied type. JDK proxies have neither
-    # problem, and because a JDK proxy cannot be cast to the implementation, "depend on the
-    # interface" becomes structural rather than aspirational.
-    #
-    # ProxyStrategyIT asserts the outcome, so this cannot silently regress.
-    proxy-target-class: false
-
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/revshare}
     username: ${DB_USERNAME:revshare}

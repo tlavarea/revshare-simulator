@@ -10,19 +10,18 @@ import java.util.Map;
 /**
  * Gathers the facts {@code RevenueShareCalculator} needs about each potential beneficiary.
  *
- * <p>An interface over a single implementation, deliberately. Every {@code @Service} here is proxied —
- * {@link org.springframework.transaction.annotation.Transactional} guarantees it — and Spring can only produce a JDK
- * dynamic proxy when the bean implements one. Without an interface it falls back to CGLIB, which subclasses the bean:
- * that requires a non-final class with a non-final method for every advised call, silently does nothing when either is
- * final, and generates a class at runtime for each proxied type.
+ * <p>An interface over a single implementation, for the seam rather than for the proxy. The one caller,
+ * {@link RecordClosedTransactionService}, depends on this contract rather than on how the facts are fetched — which is
+ * the point, since fetching them without an N+1 is the entire substance of the implementation, and is the part most
+ * likely to be replaced.
  *
- * <p>Note that the interface alone is not sufficient. Spring Boot defaults {@code spring.aop.proxy-target-class} to
- * {@code true}, which forces class-based proxying whether or not interfaces exist; {@code application.yaml} sets it to
- * {@code false}, and {@code ProxyStrategyIT} asserts the result rather than trusting it.
- *
- * <p>The interface also states the seam plainly. The one caller, {@link RecordClosedTransactionService}, depends on
- * this contract rather than on how the facts are fetched — which is the whole point, since fetching them without an N+1
- * is the entire substance of the implementation.
+ * <p>Explicitly <em>not</em> here to force JDK dynamic proxies. Spring Boot defaults
+ * {@code spring.aop.proxy-target-class} to {@code true} and this project leaves it there, so services are proxied by
+ * CGLIB. That default exists for good reason: JDK proxies fail with a {@code ClassCastException} anywhere something
+ * injects or casts to the concrete type, and Spring repackages both CGLIB and Objenesis inside {@code spring-core}, so
+ * the historical objections to class-based proxying — an extra dependency, jar conflicts, a required default
+ * constructor — no longer apply. The one genuine cost is that {@code final} classes and methods are silently unadvised,
+ * which is avoided by not making service methods final rather than by overriding a framework default.
  */
 public interface BeneficiaryStandingResolver {
 

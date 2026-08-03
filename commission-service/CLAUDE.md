@@ -22,16 +22,21 @@ resources/db/changelog/    Liquibase changesets
 stateless transactional service. Adapters stay `@Component` under `adapter/out/**`, because
 they implement driven ports rather than orchestrating anything.
 
-**Every `@Service` implements an interface**, so Spring proxies it with a JDK dynamic proxy
-instead of a CGLIB subclass. `RecordClosedTransactionService` implements the `RecordClosedTransaction`
-driving port; `BeneficiaryStandingResolverImpl` implements `BeneficiaryStandingResolver` (interface
-plus `Impl`, matching the convention in the other repos).
+**Every `@Service` implements an interface** — `RecordClosedTransactionService` implements the
+`RecordClosedTransaction` driving port, `BeneficiaryStandingResolverImpl` implements
+`BeneficiaryStandingResolver`. Interface plus `Impl`, matching the convention in the other repos.
+The reason is the seam and the stated contract, **not** the proxy strategy.
 
-**The interface alone does nothing.** Spring Boot defaults `spring.aop.proxy-target-class` to
-`true`, which forces class-based proxying regardless of interfaces — verified: before it was set,
-both services resolved to `...$$SpringCGLIB$$0` even though both already implemented interfaces.
-`application.yaml` sets it to `false` and `ProxyStrategyIT` asserts the outcome, so it cannot
-silently regress. Do not remove either.
+**Services are CGLIB-proxied, deliberately.** `spring.aop.proxy-target-class` is left at Spring
+Boot's default of `true`, so an interface does not by itself produce a JDK dynamic proxy. Don't
+"fix" this — it was tried and reverted. JDK proxies fail with a `ClassCastException` anywhere
+something injects or casts to the concrete type, which is precisely why Boot made CGLIB the
+default in 2.0. Spring repackages CGLIB and Objenesis inside `spring-core` (229 and 54 classes
+respectively), so the old objections — extra dependency, jar conflicts, required default
+constructor — no longer apply.
+
+The one real cost of CGLIB is that `final` classes and methods are silently unadvised. Avoid it
+by not making service classes or methods final, rather than by overriding the framework default.
 
 Dependencies point inward. Nothing here is imported by `domain-core`; this module implements
 interfaces declared there.
