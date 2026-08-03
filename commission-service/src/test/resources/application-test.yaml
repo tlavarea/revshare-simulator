@@ -1,0 +1,25 @@
+# Test-only overrides, applied to every integration test.
+#
+# The scheduler is effectively switched off by pushing its initial delay an hour out. Tests
+# drive OutboxRelay.relayBatch() directly instead, which makes them deterministic: a background
+# poll firing mid-assertion would publish rows the test had not finished setting up, and the
+# resulting failures would be intermittent and blamed on Kafka.
+#
+# The relay is still exercised through its real method — only the timer is disabled.
+revshare:
+  outbox:
+    initial-delay-ms: 3600000
+    poll-interval-ms: 3600000
+
+spring:
+  kafka:
+    admin:
+      # Most integration tests need Postgres and no broker. Left on, KafkaAdmin would try to
+      # create the topics declared in KafkaConfiguration against the default localhost:9092,
+      # spend about thirty seconds retrying a connection that is never going to arrive, and then
+      # log a TimeoutException stack trace that looks like a failure but is not one.
+      #
+      # AbstractKafkaIT turns this back on, so topics are still created explicitly wherever a
+      # broker actually exists — which is what keeps the partition count under the tests' control
+      # rather than letting the broker auto-create single-partition topics on first publish.
+      auto-create: false

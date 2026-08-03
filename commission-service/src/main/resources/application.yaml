@@ -37,6 +37,35 @@ spring:
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # The outbox payload is already a JSON string, so it goes out as-is rather than being
+      # serialized a second time.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Wait for all in-sync replicas. Anything weaker means an acknowledged event can be lost
+      # on a broker failure, and the relay would have already marked the row published.
+      acks: all
+      properties:
+        # Deduplicates producer-side retries and preserves per-partition ordering across them.
+        # Without it, a retry after a timeout can both duplicate a record and reorder it behind
+        # the next one.
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 30000
+
+revshare:
+  outbox:
+    # Latency versus load. Events are already durable, so a slower poll only delays the read
+    # side; it never risks losing anything.
+    poll-interval-ms: 500
+    initial-delay-ms: 1000
+    batch-size: 100
+  kafka:
+    partitions: 3
+    replicas: 1
+
 logging:
   level:
     com.revshare: INFO

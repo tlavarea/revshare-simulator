@@ -2,6 +2,7 @@ package com.revshare.commission;
 
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 /**
@@ -21,6 +22,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * changelog against it — the migrations are under test here too, not assumed.
  */
 @SpringBootTest
+@ActiveProfiles("test")
 public abstract class AbstractPostgresIT {
 
     @ServiceConnection
