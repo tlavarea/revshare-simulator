@@ -9,7 +9,8 @@ its driven ports.
 ## Layout
 
 ```
-service/                   RecordClosedTransactionService, BeneficiaryStandingResolver
+service/                   RecordClosedTransactionService, BeneficiaryStandingResolverImpl
+                           (+ their interfaces)
 adapter/out/persistence/   entities, Spring Data repositories, port adapters, the mapper
 adapter/out/messaging/     OutboxEventPublisher
 config/                    domain beans, event serialization
@@ -17,9 +18,20 @@ resources/db/changelog/    Liquibase changesets
 ```
 
 **Package convention.** `@Service` classes live in `service`, full stop — including
-`BeneficiaryStandingResolver`, which is a collaborator rather than a use case but is still a
+`BeneficiaryStandingResolverImpl`, which is a collaborator rather than a use case but is still a
 stateless transactional service. Adapters stay `@Component` under `adapter/out/**`, because
 they implement driven ports rather than orchestrating anything.
+
+**Every `@Service` implements an interface**, so Spring proxies it with a JDK dynamic proxy
+instead of a CGLIB subclass. `RecordClosedTransactionService` implements the `RecordClosedTransaction`
+driving port; `BeneficiaryStandingResolverImpl` implements `BeneficiaryStandingResolver` (interface
+plus `Impl`, matching the convention in the other repos).
+
+**The interface alone does nothing.** Spring Boot defaults `spring.aop.proxy-target-class` to
+`true`, which forces class-based proxying regardless of interfaces — verified: before it was set,
+both services resolved to `...$$SpringCGLIB$$0` even though both already implemented interfaces.
+`application.yaml` sets it to `false` and `ProxyStrategyIT` asserts the outcome, so it cannot
+silently regress. Do not remove either.
 
 Dependencies point inward. Nothing here is imported by `domain-core`; this module implements
 interfaces declared there.
