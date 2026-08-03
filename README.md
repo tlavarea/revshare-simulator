@@ -21,7 +21,7 @@ of it leaving the company.
 | --- | --- |
 | `domain-core` | Complete. Framework-free hexagonal core, 74 unit tests. |
 | `seed-generator` | Complete. Deterministic synthetic data, CLI, 19 tests. |
-| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox, 18 Testcontainers integration tests. Kafka relay and REST still to come. |
+| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, 27 Testcontainers integration tests. REST still to come. |
 | `reporting-service` | Not started. Read side: Kafka consumer, MongoDB projections. |
 
 ## Quick start
@@ -39,7 +39,8 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 21)   # macOS
   -Dexec.args="--summary-only"
 ```
 
-Infrastructure for the (not yet written) services:
+Infrastructure for the services. `./mvnw verify` does not need it — the integration tests start
+their own Postgres and Kafka via Testcontainers — but running `commission-service` locally does:
 
 ```bash
 docker compose up -d      # Postgres, MongoDB, Kafka
@@ -288,7 +289,7 @@ read as decisions rather than oversights:
 ## Testing
 
 ```bash
-./mvnw verify           # 96 tests
+./mvnw verify           # 120 tests
 ./mvnw -pl domain-core test
 ```
 

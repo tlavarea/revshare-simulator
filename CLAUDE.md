@@ -20,8 +20,8 @@ Modules:
 - **`domain-core/`** — the framework-free hexagonal core. Zero compile-scoped dependencies,
   enforced by the build. See `domain-core/CLAUDE.md`.
 - **`seed-generator/`** — deterministic synthetic data. See `seed-generator/CLAUDE.md`.
-- **`commission-service/`** — not yet written. Write side: Postgres, JPA, Kafka producer,
-  transactional outbox.
+- **`commission-service/`** — the write side: Postgres, JPA, and a transactional outbox relayed
+  to Kafka by `OutboxRelay`. No REST layer yet.
 - **`reporting-service/`** — not yet written. Read side: Kafka consumer, MongoDB projections.
 
 `README.md` is the reviewer-facing document and carries the full domain explanation, the

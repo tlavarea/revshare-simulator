@@ -42,7 +42,10 @@ services:
 
   # KRaft mode, so there is no ZooKeeper to run alongside it.
   kafka:
-    image: apache/kafka:3.9.0
+    # Kept in step with AbstractKafkaIT so the development broker and the test broker are the
+    # same release. 3.9.0 is avoided there because it cannot start under Testcontainers at all;
+    # see that class for the detail.
+    image: apache/kafka:3.9.2
     container_name: revshare-kafka
     ports:
       - "9092:9092"

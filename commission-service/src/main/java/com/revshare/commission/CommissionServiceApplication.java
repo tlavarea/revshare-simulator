@@ -2,6 +2,7 @@ package com.revshare.commission;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 /**
@@ -12,6 +13,7 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
  * outbox for the read side to consume.
  */
 @SpringBootApplication
+@EnableScheduling
 @EnableTransactionManagement
 public class CommissionServiceApplication {
 
