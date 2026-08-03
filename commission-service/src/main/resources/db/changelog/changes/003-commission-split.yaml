@@ -1,0 +1,132 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-create-commission-split
+      author: revshare
+      comment: >
+        The priced closing. Keyed by the client-assigned transaction id rather than a
+        generated surrogate, which makes the primary key itself the idempotency guard:
+        replaying a TransactionClosed event cannot double-charge an agent, because the
+        second insert violates the primary key.
+
+        No version column, and no update path. A priced closing is a fact about the past;
+        corrections are new compensating rows, so a statement recomputed from history
+        always produces the numbers it produced the first time.
+      changes:
+        - createTable:
+            tableName: commission_split
+            columns:
+              - column:
+                  name: transaction_id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_commission_split
+                    nullable: false
+              - column:
+                  name: agent_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: closed_on
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cap_year_start
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: sale_price
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: gross_commission_income
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: agent_earnings
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: company_earnings
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cap_contribution
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: post_cap_fee_charged
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              # The quantity that connects the two halves of the system: gross commission
+              # that actually produced company dollar, and so can fund revenue share.
+              - column:
+                  name: revenue_share_eligible_gross
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: priced_under_post_cap_fee
+                  type: boolean
+                  constraints:
+                    nullable: false
+              - column:
+                  name: reached_cap_on_this_transaction
+                  type: boolean
+                  constraints:
+                    nullable: false
+              - column:
+                  name: side
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: property_reference
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: recorded_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+
+        - addForeignKeyConstraint:
+            constraintName: fk_commission_split_agent
+            baseTableName: commission_split
+            baseColumnNames: agent_id
+            referencedTableName: agent
+            referencedColumnNames: id
+            onDelete: RESTRICT
+
+        # Conservation of money, checked by the database. If this ever fires, the
+        # calculator has produced a split that creates or destroys money.
+        - sql:
+            comment: Agent plus company earnings must equal gross commission
+            sql: >
+              ALTER TABLE commission_split ADD CONSTRAINT ck_commission_split_balances
+              CHECK (agent_earnings + company_earnings = gross_commission_income
+                 AND cap_contribution + post_cap_fee_charged = company_earnings
+                 AND revenue_share_eligible_gross <= gross_commission_income)
+            rollback: ALTER TABLE commission_split DROP CONSTRAINT ck_commission_split_balances
+
+        # Serves ProductionHistory's trailing-window aggregate, which is the hot read on
+        # this table: it runs once per beneficiary per closing to evaluate the Producing
+        # Agent Policy. Ordered (agent_id, closed_on) so the range scan is a single index
+        # seek, and gross_commission_income is included so the sum never touches the heap.
+        - sql:
+            comment: Covering index for trailing-production sums
+            sql: >
+              CREATE INDEX ix_commission_split_agent_closed_on
+              ON commission_split (agent_id, closed_on) INCLUDE (gross_commission_income)
+            rollback: DROP INDEX ix_commission_split_agent_closed_on

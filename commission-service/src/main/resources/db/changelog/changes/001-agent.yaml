@@ -1,0 +1,115 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-agent
+      author: revshare
+      comment: >
+        Agents, and the frozen sponsorship path that fixes their position in the tree.
+        sponsorship_path is a materialised path stored as uuid[], nearest ancestor first,
+        rather than being derived from sponsor_id at read time. That is a correctness
+        requirement, not an optimisation: an agent whose sponsor has left must keep their
+        original depth beneath everyone above them, and walking live parent links would
+        compress the tree on departure and pay the wrong tier rate.
+      changes:
+        - createTable:
+            tableName: agent
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_agent
+                    nullable: false
+              - column:
+                  name: first_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: last_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: email
+                  type: varchar(320)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: uq_agent_email
+              - column:
+                  name: joined_on
+                  type: date
+                  constraints:
+                    nullable: false
+              # Nullable: founders have no sponsor. Self-referencing FK, so an agent can
+              # never point at a sponsor who does not exist.
+              - column:
+                  name: sponsor_id
+                  type: uuid
+              - column:
+                  name: sponsorship_path
+                  type: uuid[]
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: elite_status
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: terminated_on
+                  type: date
+              - column:
+                  name: version
+                  type: bigint
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+
+        - addForeignKeyConstraint:
+            constraintName: fk_agent_sponsor
+            baseTableName: agent
+            baseColumnNames: sponsor_id
+            referencedTableName: agent
+            referencedColumnNames: id
+            onDelete: RESTRICT
+
+        # A terminated agent must carry a date, and an active one must not. Keeps the two
+        # representations of "has left" from drifting apart.
+        - sql:
+            comment: Termination date and status must agree
+            sql: >
+              ALTER TABLE agent ADD CONSTRAINT ck_agent_termination_consistent
+              CHECK ((status = 'TERMINATED' AND terminated_on IS NOT NULL)
+                  OR (status <> 'TERMINATED' AND terminated_on IS NULL))
+            rollback: ALTER TABLE agent DROP CONSTRAINT ck_agent_termination_consistent
+
+        - sql:
+            comment: An agent may never appear in their own upline
+            sql: >
+              ALTER TABLE agent ADD CONSTRAINT ck_agent_no_self_sponsorship
+              CHECK (sponsor_id IS DISTINCT FROM id AND NOT (id = ANY(sponsorship_path)))
+            rollback: ALTER TABLE agent DROP CONSTRAINT ck_agent_no_self_sponsorship
+
+        - createIndex:
+            indexName: ix_agent_sponsor_id
+            tableName: agent
+            columns:
+              - column:
+                  name: sponsor_id
+            # Serves findFrontlineOf, and the producing-frontline count that decides
+            # which revenue share tiers are unlocked.
+
+        # GIN over the path answers "everyone below agent X" as a containment query,
+        # with array_position giving the tier directly. Without it that question is a
+        # sequential scan of the whole roster, run once per dashboard load.
+        - sql:
+            comment: GIN index for downline containment queries
+            sql: CREATE INDEX ix_agent_sponsorship_path ON agent USING GIN (sponsorship_path)
+            rollback: DROP INDEX ix_agent_sponsorship_path

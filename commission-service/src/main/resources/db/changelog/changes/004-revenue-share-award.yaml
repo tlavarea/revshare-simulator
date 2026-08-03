@@ -1,0 +1,135 @@
+databaseChangeLog:
+  - changeSet:
+      id: 004-create-revenue-share-award
+      author: revshare
+      comment: >
+        The revenue share ledger. Append-only: awards are never updated or deleted,
+        because this is what a commission statement is reconstructed from and an edited
+        row makes a past statement unreproducible.
+
+        Forfeited awards are recorded too, with the reason. A zero-value row costs almost
+        nothing and is the only way a dashboard can later explain an absence — "you
+        forfeited $312 because your trailing production fell below the threshold" is
+        unreconstructable after the fact unless it is captured at distribution time.
+      changes:
+        - createTable:
+            tableName: revenue_share_award
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_revenue_share_award
+                    nullable: false
+              - column:
+                  name: transaction_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: beneficiary_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: contributor_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tier
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+              # The contributor's cap year, not the beneficiary's. Annual tier maxima are
+              # drawn down per contributing agent, so the allowance window belongs to
+              # whoever produced the closing.
+              - column:
+                  name: contributor_cap_year_start
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: eligible_gross
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: entitlement
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: awarded
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: forfeited
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: forfeit_reason
+                  type: varchar(40)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: recorded_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+
+        - addForeignKeyConstraint:
+            constraintName: fk_award_transaction
+            baseTableName: revenue_share_award
+            baseColumnNames: transaction_id
+            referencedTableName: commission_split
+            referencedColumnNames: transaction_id
+            onDelete: CASCADE
+
+        - addForeignKeyConstraint:
+            constraintName: fk_award_beneficiary
+            baseTableName: revenue_share_award
+            baseColumnNames: beneficiary_id
+            referencedTableName: agent
+            referencedColumnNames: id
+            onDelete: RESTRICT
+
+        # Idempotency, enforced rather than hoped for. The read side consumes at least
+        # once, so a redelivered RevenueShareDistributed event must not double-pay an
+        # upline. A beneficiary occupies exactly one tier above any given contributor, so
+        # (transaction, beneficiary) is the natural key.
+        - addUniqueConstraint:
+            constraintName: uq_award_transaction_beneficiary
+            tableName: revenue_share_award
+            columnNames: transaction_id, beneficiary_id
+
+        - sql:
+            comment: Awarded plus forfeited must reconcile to the entitlement
+            sql: >
+              ALTER TABLE revenue_share_award ADD CONSTRAINT ck_award_reconciles
+              CHECK (awarded >= 0 AND forfeited >= 0 AND awarded + forfeited = entitlement)
+            rollback: ALTER TABLE revenue_share_award DROP CONSTRAINT ck_award_reconciles
+
+        - sql:
+            comment: An agent cannot earn revenue share from their own production
+            sql: >
+              ALTER TABLE revenue_share_award ADD CONSTRAINT ck_award_not_self
+              CHECK (beneficiary_id <> contributor_id)
+            rollback: ALTER TABLE revenue_share_award DROP CONSTRAINT ck_award_not_self
+
+        # The hot read: how much of this tier's annual maximum has this beneficiary
+        # already drawn from this contributor? Consulted up to five times per closing.
+        # Column order matches the equality predicates; `awarded` is included so the sum
+        # is answered from the index alone.
+        - sql:
+            comment: Covering index for remaining-allowance sums
+            sql: >
+              CREATE INDEX ix_award_allowance_lookup
+              ON revenue_share_award
+                (beneficiary_id, contributor_id, tier, contributor_cap_year_start)
+              INCLUDE (awarded)
+            rollback: DROP INDEX ix_award_allowance_lookup

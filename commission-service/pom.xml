@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.revshare</groupId>
+    <artifactId>revshare-simulator</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>commission-service</artifactId>
+  <name>commission-service</name>
+  <description>
+    The write side. Prices closings against the commission plan, tracks cap progress,
+    distributes revenue share, and records the resulting events to a transactional outbox.
+    Owns the Postgres schema; the driving adapters and the outbox relay live alongside.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.revshare</groupId>
+      <artifactId>domain-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.liquibase</groupId>
+      <artifactId>liquibase-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <!-- Serialises domain events into the outbox payload column. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Generates a brokerage to drive the integration tests, rather than hand-rolling
+         fixtures that drift from what the system actually receives. -->
+    <dependency>
+      <groupId>com.revshare</groupId>
+      <artifactId>seed-generator</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        The `exec` classifier is required, not cosmetic.
+
+        `repackage` is bound to `package`, which runs before `failsafe:integration-test`.
+        Without a classifier it rewrites the module's own jar in place into a Boot fat jar,
+        moving the classes down under BOOT-INF/classes. Failsafe then puts that jar on the
+        test classpath, the engine cannot load the test classes from it, and the run fails
+        with nothing but "TestEngine with ID 'junit-jupiter' failed to discover tests" - no
+        cause, in the log or the dump files.
+
+        With a classifier the plain jar stays the primary artifact and the executable one is
+        published alongside as commission-service-<version>-exec.jar.
+      -->
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <classifier>exec</classifier>
+        </configuration>
+        <executions>
+          <execution>
+            <goals><goal>repackage</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!--
+        Integration tests run under failsafe (*IT), unit tests under surefire (*Test).
+        The split matters here: every *IT starts a Postgres container, so keeping them out
+        of the surefire run keeps the fast feedback loop fast.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

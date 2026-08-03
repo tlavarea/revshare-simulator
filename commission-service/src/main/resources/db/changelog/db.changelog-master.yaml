@@ -1,0 +1,11 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changes/001-agent.yaml
+  - include:
+      file: db/changelog/changes/002-cap-progress.yaml
+  - include:
+      file: db/changelog/changes/003-commission-split.yaml
+  - include:
+      file: db/changelog/changes/004-revenue-share-award.yaml
+  - include:
+      file: db/changelog/changes/005-outbox.yaml

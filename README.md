@@ -21,7 +21,7 @@ of it leaving the company.
 | --- | --- |
 | `domain-core` | Complete. Framework-free hexagonal core, 74 unit tests. |
 | `seed-generator` | Complete. Deterministic synthetic data, CLI, 19 tests. |
-| `commission-service` | Not started. Write side: Postgres, JPA, Kafka producer, outbox. |
+| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox, 18 Testcontainers integration tests. Kafka relay and REST still to come. |
 | `reporting-service` | Not started. Read side: Kafka consumer, MongoDB projections. |
 
 ## Quick start
@@ -44,6 +44,9 @@ Infrastructure for the (not yet written) services:
 ```bash
 docker compose up -d      # Postgres, MongoDB, Kafka
 ```
+
+Integration tests need Docker running, but not `docker compose` — Testcontainers starts its
+own throwaway Postgres.
 
 ## The business rules
 
@@ -291,6 +294,10 @@ read as decisions rather than oversights:
 
 - **JUnit 5 + AssertJ**, no mocking framework in the domain — the pure calculators do not
   need one.
+- **Testcontainers** for `commission-service`, against a real Postgres rather than H2: the
+  `uuid[]` sponsorship path, the partial index on the outbox, `jsonb` payloads and every
+  `CHECK` constraint only exist there. `CapProgressConcurrencyIT` races real threads through
+  real transactions to prove concurrent closings cannot lose a cap contribution.
 - Tests are named as behaviour (`overshootGoesToTheAgent`,
   `downlineDoesNotCompress`) rather than after methods.
 - Rounding behaviour is pinned explicitly, including a test that asserts the *bound* on
