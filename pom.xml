@@ -29,6 +29,7 @@
   <modules>
     <module>domain-core</module>
     <module>seed-generator</module>
+    <module>commission-service</module>
   </modules>
 
   <properties>
@@ -76,6 +77,25 @@
     <dependency>
       <groupId>org.assertj</groupId>
       <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!--
+      Declared explicitly, and deliberately.
+
+      Spring Boot 3.4 removed junit-platform-launcher from spring-boot-starter-test. Left
+      undeclared, Surefire and Failsafe resolve a launcher themselves, and they pick a
+      JUnit 6 launcher (6.0.3) while the engine on the test classpath is JUnit 5.12
+      (platform 1.12.2). The resulting NoClassDefFoundError is swallowed and reported only
+      as "TestEngine with ID 'junit-jupiter' failed to discover tests", with no cause in
+      the logs or the dump files.
+
+      Declaring it here puts the version under the spring-boot-dependencies BOM, which
+      pins it to the same platform version as the engine.
+    -->
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

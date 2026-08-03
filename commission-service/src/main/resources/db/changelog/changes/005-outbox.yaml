@@ -1,0 +1,84 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-create-outbox
+      author: revshare
+      comment: >
+        The transactional outbox. Events are appended here inside the same transaction as
+        the aggregate write that produced them, and relayed to Kafka afterwards by a
+        separate poller.
+
+        This exists to avoid a dual write. Writing to Postgres and then publishing to
+        Kafka in the same method is two independent commits: a crash between them leaves
+        the read side permanently behind, with nothing in either system to detect the gap.
+        Appending to this table instead makes the event durable exactly when the state
+        change is durable — one commit, one outcome.
+
+        The relay is at-least-once by construction, which is why every consumer-facing
+        uniqueness rule in this schema exists.
+      changes:
+        - createTable:
+            tableName: outbox
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_outbox
+                    nullable: false
+              - column:
+                  name: aggregate_type
+                  type: varchar(60)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: aggregate_id
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_type
+                  type: varchar(60)
+                  constraints:
+                    nullable: false
+              # Decided by the domain event, not the relay. Commission events key on the
+              # agent so one agent's cumulative cap progress stays ordered; revenue share
+              # events key on the contributor, because one event concerns up to five
+              # beneficiaries and none of them can own the ordering.
+              - column:
+                  name: partition_key
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: payload
+                  type: jsonb
+                  constraints:
+                    nullable: false
+              - column:
+                  name: occurred_at
+                  type: timestamptz
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              # Null until relayed. Rows are marked rather than deleted so a published
+              # event remains auditable, and so the relay's progress is inspectable.
+              - column:
+                  name: published_at
+                  type: timestamptz
+
+        # Partial index over unpublished rows only. The relay polls this constantly, and
+        # the backlog is a tiny fraction of the table once the system is warm — indexing
+        # only the unpublished rows keeps the poll a small index scan forever, instead of
+        # one that degrades in proportion to total history.
+        - sql:
+            comment: Partial index over the unpublished backlog
+            sql: >
+              CREATE INDEX ix_outbox_unpublished ON outbox (occurred_at)
+              WHERE published_at IS NULL
+            rollback: DROP INDEX ix_outbox_unpublished

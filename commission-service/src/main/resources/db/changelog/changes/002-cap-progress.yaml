@@ -1,0 +1,95 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-create-cap-progress
+      author: revshare
+      comment: >
+        One row per agent per cap year. The cap year is anchored on the agent's own
+        anniversary rather than the calendar, so the window bounds are stored explicitly
+        instead of being derived from a year number.
+
+        The version column is load-bearing. Cap progress is read-modify-write, and two
+        closings priced concurrently for one agent would otherwise both read the same
+        balance, both compute a full split, and both write — losing one contribution and
+        letting the agent earn past the cap. The money involved is real and the error
+        leaves no trace in the data afterwards.
+      changes:
+        - createTable:
+            tableName: cap_progress
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_cap_progress
+                    nullable: false
+              - column:
+                  name: agent_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cap_year_start
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cap_year_end_exclusive
+                  type: date
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cap_year_ordinal
+                  type: integer
+                  constraints:
+                    nullable: false
+              - column:
+                  name: contributed
+                  type: numeric(19,2)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: cap_amount
+                  type: numeric(19,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: version
+                  type: bigint
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+
+        - addForeignKeyConstraint:
+            constraintName: fk_cap_progress_agent
+            baseTableName: cap_progress
+            baseColumnNames: agent_id
+            referencedTableName: agent
+            referencedColumnNames: id
+            onDelete: CASCADE
+
+        # Both the correctness guarantee and the lookup index. findOrOpen races two
+        # writers on a brand-new cap year; this constraint is what makes the loser fail
+        # loudly and retry rather than silently create a second row that would let the
+        # agent contribute twice the cap.
+        - addUniqueConstraint:
+            constraintName: uq_cap_progress_agent_year
+            tableName: cap_progress
+            columnNames: agent_id, cap_year_start
+
+        # The central money invariant, enforced by the database and not only by the
+        # aggregate: an agent can never contribute more than the cap.
+        - sql:
+            comment: Contributions are bounded by the cap
+            sql: >
+              ALTER TABLE cap_progress ADD CONSTRAINT ck_cap_progress_within_cap
+              CHECK (contributed >= 0 AND cap_amount > 0 AND contributed <= cap_amount)
+            rollback: ALTER TABLE cap_progress DROP CONSTRAINT ck_cap_progress_within_cap
+
+        - sql:
+            comment: Cap year must be a non-empty forward range
+            sql: >
+              ALTER TABLE cap_progress ADD CONSTRAINT ck_cap_progress_year_range
+              CHECK (cap_year_end_exclusive > cap_year_start)
+            rollback: ALTER TABLE cap_progress DROP CONSTRAINT ck_cap_progress_year_range

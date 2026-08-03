@@ -33,5 +33,10 @@ public interface RevenueShareLedger {
      * <p>Must be idempotent on transaction id: the read side consumes at least once, and a redelivered event must not
      * double-pay an upline.
      */
-    void record(RevenueShareDistribution distribution);
+    /**
+     * Takes the contributor's cap year explicitly rather than deriving it from the closing date. The allowance window
+     * belongs to the contributor, and resolving it needs that agent's join date — a lookup the caller has already done
+     * to price the closing, and which the ledger has no business repeating.
+     */
+    void record(RevenueShareDistribution distribution, CapYear contributorCapYear);
 }

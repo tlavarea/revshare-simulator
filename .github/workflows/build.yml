@@ -32,6 +32,8 @@ jobs:
       - name: Check formatting
         run: ./mvnw -B spotless:check
 
+      # Includes commission-service's Testcontainers integration tests, which start a real
+      # Postgres. ubuntu-latest runners have Docker available, so no setup step is needed.
       - name: Build and test
         run: ./mvnw -B verify
 
