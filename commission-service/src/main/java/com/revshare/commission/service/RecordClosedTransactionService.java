@@ -1,4 +1,4 @@
-package com.revshare.commission.application;
+package com.revshare.commission.service;
 
 import com.revshare.domain.agent.Agent;
 import com.revshare.domain.agent.AgentId;
@@ -17,6 +17,7 @@ import com.revshare.domain.port.out.CapProgressRepository;
 import com.revshare.domain.port.out.CommissionSplitRepository;
 import com.revshare.domain.port.out.DomainEventPublisher;
 import com.revshare.domain.port.out.RevenueShareLedger;
+import com.revshare.domain.revshare.BeneficiaryStanding;
 import com.revshare.domain.revshare.ProducingAgentPolicy;
 import com.revshare.domain.revshare.RevenueShareCalculator;
 import com.revshare.domain.revshare.RevenueShareDistribution;
@@ -144,7 +145,7 @@ public class RecordClosedTransactionService implements RecordClosedTransaction {
                     split.transactionId(), split.agentId(), split.closedOn(), split.revenueShareEligibleGross());
         }
 
-        Map<AgentId, com.revshare.domain.revshare.BeneficiaryStanding> resolved =
+        Map<AgentId, BeneficiaryStanding> resolved =
                 standings.resolve(upline, contributor.id(), split.closedOn(), capYear);
 
         return revenueShareCalculator.distribute(

@@ -24,7 +24,7 @@ import org.springframework.context.annotation.Configuration;
  * an HTTP response — a naming strategy, a date format, an inclusion rule — silently altering the format of every event
  * thereafter, with the old and new shapes interleaved in one table and nothing recording which is which.
  *
- * <p>The value-object serialisers exist for the same reason. Left to reflection, Jackson renders the domain's wrapper
+ * <p>The value-object serializers exist for the same reason. Left to reflection, Jackson renders the domain's wrapper
  * types structurally, so an agent id becomes {@code {"agentId":{"value":"9ae8..."}}} and a money amount
  * {@code {"awarded":{"amount":500.00}}}. That is valid but awkward to consume and leaks the core's internal shape into
  * the wire format. Flattening them to a string and a number keeps the payload readable and, more importantly, keeps it

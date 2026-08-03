@@ -1,4 +1,4 @@
-package com.revshare.commission.application;
+package com.revshare.commission.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -1,4 +1,4 @@
-package com.revshare.commission.application;
+package com.revshare.commission.service;
 
 import com.revshare.domain.agent.Agent;
 import com.revshare.domain.agent.AgentId;
@@ -17,7 +17,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -38,8 +38,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>All facts are resolved as at the closing date, never "now". Reprocessing a six-month-old closing has to reach the
  * verdict it reached originally.
+ *
+ * <p>A collaborator of {@code RecordClosedTransactionService} rather than a use case in its own right: it implements no
+ * driving port and owns no transaction boundary, running instead inside the caller's. It is still a service —
+ * stateless, transactional, orchestrating ports — so it lives here beside the use case rather than in a package of its
+ * own.
  */
-@Component
+@Service
 public class BeneficiaryStandingResolver {
 
     private final AgentRepository agents;
