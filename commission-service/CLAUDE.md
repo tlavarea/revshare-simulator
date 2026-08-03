@@ -9,12 +9,17 @@ its driven ports.
 ## Layout
 
 ```
+service/                   RecordClosedTransactionService, BeneficiaryStandingResolver
 adapter/out/persistence/   entities, Spring Data repositories, port adapters, the mapper
 adapter/out/messaging/     OutboxEventPublisher
-application/               RecordClosedTransactionService, BeneficiaryStandingResolver
-config/                    domain beans, event serialisation
+config/                    domain beans, event serialization
 resources/db/changelog/    Liquibase changesets
 ```
+
+**Package convention.** `@Service` classes live in `service`, full stop — including
+`BeneficiaryStandingResolver`, which is a collaborator rather than a use case but is still a
+stateless transactional service. Adapters stay `@Component` under `adapter/out/**`, because
+they implement driven ports rather than orchestrating anything.
 
 Dependencies point inward. Nothing here is imported by `domain-core`; this module implements
 interfaces declared there.
