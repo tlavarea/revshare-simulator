@@ -1,0 +1,236 @@
+### Revshare simulator — live demo walkthrough
+#
+# A fixed, rehearsed script for showing the domain rules that are easy to get wrong:
+# the anniversary cap year, a closing that straddles the cap, the flat post-cap fee,
+# idempotent replay, and a sponsorship hierarchy that doesn't compress on departure.
+#
+# All ids, dates and dollar amounts below are fixed on purpose — every figure was
+# checked against CommissionCalculator by hand before being written down here, so
+# what you see when you run this should match the commentary exactly. If you ever
+# regenerate the ids, the cap-straddle and post-cap requests (5 and 6) need
+# their gross commission amounts re-derived; see the comment on each.
+#
+# Setup:
+#   export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+#   docker compose up -d
+#   ./mvnw -pl commission-service spring-boot:run &                                                  # :8080
+#   ./mvnw -pl reporting-service spring-boot:run -Dspring-boot.run.arguments=--server.port=8081 &     # :8081
+#
+# Run top to bottom, in order — several requests depend on the state the ones above left behind.
+# Works with the VS Code "REST Client" extension or IntelliJ's built-in HTTP client.
+
+@commission = http://localhost:8080
+@reporting = http://localhost:8081
+
+@agentA = 28a3cfd8-02ab-4e37-a901-a123d9ae8182
+@agentB = 4b7756bf-716f-479f-8a9f-1c46449f3163
+@agentC = 282cf72a-ef4c-4ea7-8b79-32c83dcd6f12
+
+@tx1 = 95108d99-b71f-4870-8180-0332679bb4c8
+@tx2 = 310be8fc-cd2d-4b2c-98d8-87486ebf063a
+@tx3 = 28007f9f-b671-4e6b-829c-e8996c86cb3c
+
+
+### 1. Enroll Agent A — top of the tree, no sponsor
+# sponsorId is simply omitted. The path is derived server-side, never accepted from
+# the client — that's what makes every tier and revenue-share rate downstream
+# trustworthy.
+POST {{commission}}/agents
+Content-Type: application/json
+
+{
+  "agentId": "{{agentA}}",
+  "firstName": "Ada",
+  "lastName": "Ancestor",
+  "email": "ada.ancestor@revshare.test",
+  "joinedOn": "2022-01-10"
+}
+
+
+### 2. Enroll Agent B — sponsored by A
+POST {{commission}}/agents
+Content-Type: application/json
+
+{
+  "agentId": "{{agentB}}",
+  "firstName": "Bo",
+  "lastName": "Bridge",
+  "email": "bo.bridge@revshare.test",
+  "joinedOn": "2022-02-01",
+  "sponsorId": "{{agentA}}"
+}
+
+
+### 3. Enroll Agent C — sponsored by B, three deep from A
+# A <- B <- C. Closings under C fund revenue share up to B (tier 1) automatically.
+# Tier 2 (A) needs 5 *producing* frontline agents under A to unlock — this 3-agent
+# demo doesn't have that, so A's dashboard later will show C in the downline but
+# never a tier-2 award. Say that out loud before it looks like a bug.
+POST {{commission}}/agents
+Content-Type: application/json
+
+{
+  "agentId": "{{agentC}}",
+  "firstName": "Cy",
+  "lastName": "Closer",
+  "email": "cy.closer@revshare.test",
+  "joinedOn": "2022-03-15",
+  "sponsorId": "{{agentB}}"
+}
+
+
+### 4. Baseline closing — well under the cap
+# C's cap year runs 2023-03-15 to 2024-03-14 (their anniversary, not the calendar).
+# Company share = 73333.33 x 15% = 10999.9995, rounds HALF_UP to $11,000.00 —
+# chosen so C's cap balance lands at exactly $1,000 remaining after this one.
+POST {{commission}}/transactions
+Content-Type: application/json
+
+{
+  "transactionId": "{{tx1}}",
+  "agentId": "{{agentC}}",
+  "closedOn": "2023-06-01",
+  "salePrice": "950000.00",
+  "grossCommissionIncome": "73333.33",
+  "side": "LISTING",
+  "propertyReference": "PROP-DEMO-0001"
+}
+
+
+### 5. The straddle — $1,000 of cap left, a $20,000 closing arrives
+# Normal split would take $3,000 (15%); only $1,000 of cap remains, so the company
+# takes $1,000 and the other $2,000 goes to the agent instead of being carried
+# forward. Watch the response: pricedUnderPostCapFee is false (this one is still
+# priced under the split, not the flat fee — the fee starts on the *next* closing)
+# and reachedCap is true. revenueShareEligibleGross should read ~$6,666.67, not
+# $20,000 — only the pre-cap slice funds the upline.
+POST {{commission}}/transactions
+Content-Type: application/json
+
+{
+  "transactionId": "{{tx2}}",
+  "agentId": "{{agentC}}",
+  "closedOn": "2023-07-15",
+  "salePrice": "260000.00",
+  "grossCommissionIncome": "20000.00",
+  "side": "DUAL",
+  "propertyReference": "PROP-DEMO-0002"
+}
+
+
+### 6. Post-cap — the flat fee kicks in
+# C capped on the closing above, so this one skips the split entirely: a flat
+# $285 (non-Elite) instead of 15%. capContribution is $0 and, because none of
+# this gross produced company dollar, revenueShareEligibleGross is $0 too — expect
+# an empty or all-forfeited awards list. That emptiness is the rule working, not
+# a broken request.
+POST {{commission}}/transactions
+Content-Type: application/json
+
+{
+  "transactionId": "{{tx3}}",
+  "agentId": "{{agentC}}",
+  "closedOn": "2023-09-01",
+  "salePrice": "195000.00",
+  "grossCommissionIncome": "15000.00",
+  "side": "BUYING",
+  "propertyReference": "PROP-DEMO-0003"
+}
+
+
+### 7. Replay the straddle closing — identical body, same transaction id
+# 200, not 201 — the status line alone says "this already happened" without
+# parsing the body. revenueShare is null in the response, not a zeroed block:
+# the replay path never re-reads the ledger, so it genuinely does not know who
+# was paid, and reporting a zero would misstate that as a fact.
+POST {{commission}}/transactions
+Content-Type: application/json
+
+{
+  "transactionId": "{{tx2}}",
+  "agentId": "{{agentC}}",
+  "closedOn": "2023-07-15",
+  "salePrice": "260000.00",
+  "grossCommissionIncome": "20000.00",
+  "side": "DUAL",
+  "propertyReference": "PROP-DEMO-0002"
+}
+
+
+### 8. Terminate B — the mid-chain departure
+# B has both an upline (A) and a downline (C) at the moment they leave. Nothing
+# is deleted: POST .../termination, not DELETE.
+POST {{commission}}/agents/{{agentB}}/termination
+Content-Type: application/json
+
+{
+  "terminatedOn": "2023-10-01"
+}
+
+
+### 9. Dashboard for A — the hierarchy does not compress
+# The moment worth narrating slowly. C stays at tier 2 beneath A, not promoted to
+# tier 1 now that B is gone — a naive live-parent-pointer implementation would
+# promote C here and pay A the 5% rate instead of the correct 4%. B still shows
+# in A's tier 1, marked departed, not removed. Also look at the gap between
+# `downline` and `contributors` on each tier: recruited versus actually earning.
+GET {{reporting}}/agents/{{agentA}}/dashboard
+
+
+### 10. Dashboard for C — cap progress and production, from the read side
+# Confirms the write side's numbers made it through the outbox -> Kafka ->
+# projection pipeline: cap progress against the 2023-03-15 anniversary window,
+# and production totals from all three closings.
+GET {{reporting}}/agents/{{agentC}}/dashboard
+
+
+### --- Bonus: edge cases worth having queued up if there's time left ---
+
+### 11. Re-enroll Agent A — 409, not an idempotent replay
+# Unlike a closing, an enrolment carries a name and email that might differ from
+# what's stored — silently accepting a repeat would risk overwriting a real
+# record from what only looks like a retry.
+POST {{commission}}/agents
+Content-Type: application/json
+
+{
+  "agentId": "{{agentA}}",
+  "firstName": "Ada",
+  "lastName": "Ancestor",
+  "email": "ada.ancestor@revshare.test",
+  "joinedOn": "2022-01-10"
+}
+
+
+### 12. Terminate B again — 409, the aggregate refuses a second departure date
+POST {{commission}}/agents/{{agentB}}/termination
+Content-Type: application/json
+
+{
+  "terminatedOn": "2023-11-01"
+}
+
+
+### 13. Malformed closing — 400, not a 500
+# grossCommissionIncome is missing entirely. This is a request-shape problem
+# (presence), handled by validation on the request DTO — distinct from a
+# business-rule rejection like gross exceeding sale price, which is enforced by
+# ClosedTransaction itself and would also come back as a 400, but from the domain.
+POST {{commission}}/transactions
+Content-Type: application/json
+
+{
+  "transactionId": "11111111-1111-1111-1111-111111111111",
+  "agentId": "{{agentC}}",
+  "closedOn": "2023-09-15",
+  "salePrice": "195000.00",
+  "side": "BUYING",
+  "propertyReference": "PROP-DEMO-0004"
+}
+
+
+### 14. Dashboard for an agent nobody ever enrolled — 404, not an empty 200
+# An empty dashboard would assert zero production as fact. 404 says "no such
+# agent" instead, which is genuinely true only because AgentEnrolled exists —
+# an agent enrolled but never producing gets a real, zeroed dashboard, not this.
+GET {{reporting}}/agents/00000000-0000-0000-0000-000000000000/dashboard
