@@ -20,10 +20,10 @@ Modules:
 - **`domain-core/`** — the framework-free hexagonal core. Zero compile-scoped dependencies,
   enforced by the build. See `domain-core/CLAUDE.md`.
 - **`seed-generator/`** — deterministic synthetic data. See `seed-generator/CLAUDE.md`.
-- **`commission-service/`** — the write side: Postgres, JPA, and a transactional outbox relayed
-  to Kafka by `OutboxRelay`. No REST layer yet. See `commission-service/CLAUDE.md`.
+- **`commission-service/`** — the write side: Postgres, JPA, a transactional outbox relayed to
+  Kafka by `OutboxRelay`, and `POST /transactions`. See `commission-service/CLAUDE.md`.
 - **`reporting-service/`** — the read side: Kafka consumer folding the event stream into MongoDB
-  dashboards. No query API yet. See `reporting-service/CLAUDE.md`.
+  dashboards, served by `GET /agents/{id}/dashboard`. See `reporting-service/CLAUDE.md`.
 
 `README.md` is the reviewer-facing document and carries the full domain explanation, the
 architecture diagram, and the table of documented assumptions. **When a business rule or an
@@ -79,6 +79,8 @@ with behaviour.** That distinction is deliberate and load-bearing — see
 
 ```
                         writes                          reads
+                    POST /transactions        GET /agents/{id}/dashboard
+                             ▼                             ▲
  ┌──────────────┐   ┌──────────────────┐          ┌───────────────────┐
  │ seed-        │──▶│ commission-      │  Kafka   │ reporting-service │
  │ generator    │   │ service          │─────────▶│                   │
@@ -134,11 +136,15 @@ the service modules get built:
   where they live: `ProjectionAtomicityIT` (a mid-transaction infrastructure failure cannot be
   requested from a real database on cue) and `AgentDashboardControllerTest` (a `@WebMvcTest`
   slice, where routing and JSON shape really are all that is under test). Before adding a third,
-  check the dependency does not belong in an argument instead.
-- **A test for something that is silently optional must be watched failing.** Both
-  `ProjectionAtomicityIT` and the write side's concurrency test assert behaviour that would
-  quietly not happen if a bean were missing; a green test proves nothing there unless the red
-  version was seen first. Say so in the Javadoc when you do it.
+  check the dependency does not belong in an argument instead. `TransactionControllerTest` is the
+  worked example of that check coming out the other way: it needed a `RecordClosedTransaction` that
+  fails twice and then succeeds, the controller already takes one as a constructor argument, and a
+  hand-written stub said it in fewer lines than the mock would have.
+- **A test for something that is silently optional must be watched failing.**
+  `ProjectionAtomicityIT`, the write side's concurrency test, and both modules'
+  `SerializationBoundaryIT` assert behaviour that would quietly not happen if a bean were
+  missing; a green test proves nothing there unless the red version was seen first. Say so in
+  the Javadoc when you do it.
 
 ## CI
 

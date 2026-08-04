@@ -21,7 +21,7 @@ of it leaving the company.
 | --- | --- |
 | `domain-core` | Complete. Framework-free hexagonal core, 74 unit tests. |
 | `seed-generator` | Complete. Deterministic synthetic data, CLI, 19 tests. |
-| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, 27 Testcontainers integration tests. REST still to come. |
+| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, and a closing API. 49 tests. |
 | `reporting-service` | Read side. Kafka consumer, MongoDB projections, transactional idempotent fold, and a read-only dashboard API. 46 tests. |
 
 ## Quick start
@@ -117,6 +117,8 @@ agent's earnings would depend on their upline's sales activity.
 
 ```
                         writes                          reads
+                    POST /transactions        GET /agents/{id}/dashboard
+                             ▼                             ▲
  ┌──────────────┐   ┌──────────────────┐          ┌───────────────────┐
  │ seed-        │──▶│ commission-      │  Kafka   │ reporting-service │
  │ generator    │   │ service          │─────────▶│                   │
@@ -203,6 +205,49 @@ see them:
   ordered (cap progress is cumulative). Revenue share events are keyed by the *contributor*,
   because one event concerns up to five beneficiaries and none of them can own the ordering.
 
+### Writing to it
+
+```
+POST /transactions
+```
+
+One endpoint, because there is one use case. The body is a closing — agent, date, sale price, gross
+commission, side — and the response is the whole receipt: the split decomposed into cap contribution
+and post-cap fee, the cap progress against the anniversary window, and every revenue share award the
+closing funded. All of it is already computed when the transaction commits, so making a caller fetch
+it from the read side afterwards would mean waiting on an eventually-consistent projection to learn
+something the write side had in hand.
+
+**The client assigns the transaction id, and it is required.** That is the idempotency key the whole
+write path is built on. A server-generated id would defeat it: a client whose request timed out has
+no way to ask "did that one land?", and retrying would record the same sale twice and charge the
+agent's cap for both. Making the caller name the closing turns a retry into a replay — answered
+**200** rather than **201**, so the distinction is readable from the status line without parsing the
+body.
+
+**A replay omits the revenue share block instead of reporting zeros.** The replay path reconstructs
+the split and the cap from storage but deliberately does not re-read the ledger — it writes nothing
+and announces nothing. Serialising its empty placeholder would state that the closing paid nobody,
+when what is true is that the response does not know who was paid. Omitting it says exactly that,
+which is the same choice the read side makes in returning 404 rather than an empty dashboard.
+
+**The retry for a contended cap lives in the controller, and could not live anywhere further in.**
+`CapProgressRepository` states that an optimistic-lock conflict is the caller's to resolve by
+re-reading and retrying. The reason it is the *caller's* is that the whole recording — cap, split,
+ledger and outbox — is a single transaction, and Postgres marks a transaction failed the moment a
+constraint trips, so retrying inside it would reuse a transaction that can no longer execute
+anything. The attempt has to be a new one, which puts the loop outside the `@Transactional`
+boundary, and the driving adapter is the first place that is true. Bounded at five attempts with
+jittered backoff; exhausting them is a `409` marked `retryable`, because a 409 can equally mean "and
+it never will" and a client should not have to guess which.
+
+**Validation is split by who owns the rule.** The request shape asserts presence only — a missing
+field is a fact about the request, and letting it become a `NullPointerException` in a domain
+constructor would be a 500 for what is plainly a 400. Every business invariant (positive amounts,
+gross commission not exceeding sale price) stays in `ClosedTransaction` and its refusal is
+translated into a 400 with the core's own message. Restating those as annotations on the request
+would give one rule two homes and let them drift.
+
 ### Why MongoDB for the read side
 
 The read model is one agent's dashboard: cap progress, earnings, and their downline grouped
@@ -249,7 +294,9 @@ already existed, Boot backed off entirely, leaving *no* primary mapper and the e
 the only candidate for serialising every HTTP response. Nothing would have looked wrong that day
 — it is the next API-motivated Jackson tweak that would have silently changed the format of every
 event, with old and new shapes interleaved in one outbox table. `SerializationBoundaryIT` is the
-guard, also watched failing.
+guard, also watched failing. The write side then hit it identically the moment it grew
+`POST /transactions` — both modules now declare an explicit `@Primary` web mapper, and both carry
+the guard.
 
 ## The seed generator
 
@@ -339,7 +386,7 @@ read as decisions rather than oversights:
 ## Testing
 
 ```bash
-./mvnw verify           # 166 tests
+./mvnw verify           # 188 tests
 ./mvnw -pl domain-core test
 ```
 
@@ -349,7 +396,9 @@ read as decisions rather than oversights:
   because a mid-transaction infrastructure failure cannot be requested from a real database on
   cue, and `AgentDashboardControllerTest`, a `@WebMvcTest` slice where routing and JSON shape
   really are all that is under test. Everything else runs against real Postgres, real Mongo and
-  a real broker.
+  a real broker. `TransactionControllerTest` needed a third and did not take it: it wanted a
+  `RecordClosedTransaction` that fails twice and then succeeds, the controller already takes one
+  as a constructor argument, and a hand-written stub said it in fewer lines than the mock would.
 - **Testcontainers** for `commission-service`, against a real Postgres rather than H2: the
   `uuid[]` sponsorship path, the partial index on the outbox, `jsonb` payloads and every
   `CHECK` constraint only exist there. `CapProgressConcurrencyIT` races real threads through
@@ -358,7 +407,10 @@ read as decisions rather than oversights:
   `downlineDoesNotCompress`) rather than after methods.
 - Rounding behaviour is pinned explicitly, including a test that asserts the *bound* on
   accumulated drift rather than pretending the arithmetic is exact.
-- Testcontainers integration tests will accompany the service modules.
+- **A test for something silently optional is watched failing first.** `ProjectionAtomicityIT`,
+  the cap concurrency test and both `SerializationBoundaryIT`s assert behaviour that would
+  quietly not happen if a bean went missing, and a green run proves nothing there unless the red
+  one was seen. Each says so in its Javadoc.
 
 ## Licence
 

@@ -11,9 +11,10 @@ its driven ports.
 ```
 service/                   RecordClosedTransactionService, BeneficiaryStandingResolverImpl
                            (+ their interfaces)
+adapter/in/web/            TransactionController, the request/response shapes, ApiExceptionHandler
 adapter/out/persistence/   entities, Spring Data repositories, port adapters, the mapper
 adapter/out/messaging/     OutboxEventPublisher
-config/                    domain beans, event serialization
+config/                    domain beans, event and web serialization
 resources/db/changelog/    Liquibase changesets
 ```
 
@@ -109,6 +110,39 @@ succeeded, so a duplicate distribution cannot reach the ledger.
 `uq_award_transaction_beneficiary` stays as a database backstop and is deliberately *not*
 caught (see trap 1).
 
+## The API
+
+`POST /transactions` is the whole surface: one endpoint for the one use case. `TransactionController`
+parses, calls the `RecordClosedTransaction` port, and maps the outcome to a status. It does no
+arithmetic and opens no transaction of its own.
+
+**201 for a new closing, 200 for a replay.** Idempotency is the port's contract, so it belongs in
+the status line — a client retrying after a timeout can tell "I recorded this" from "this was
+already recorded" without parsing the body. No `Location` header: this service exposes no read of a
+transaction, and pointing at the reporting service's projection would promise a resource that 404s
+until the event lands.
+
+**The retry loop lives in the controller, and cannot live further in.** `CapProgressRepository`
+says a conflict is the caller's to resolve by re-reading and retrying. The reason it is the
+caller's is that the whole recording is one transaction — retrying inside it would reuse a
+transaction Postgres has already marked failed (trap 1), so the attempt has to be a *new* one and
+the loop has to sit outside the `@Transactional` boundary. The controller is the first place that
+is true. Bounded at five attempts with jittered backoff; exhaustion is a `409` marked `retryable`,
+never an unbounded wait holding a connection from a deliberately small pool.
+
+**Validation is split by who owns the rule.** `RecordClosingRequest` annotates presence only — a
+missing field is a fact about the request, and an NPE from a domain constructor would be a 500 for
+what is plainly a 400. Every *business* invariant (positive amounts, commission not exceeding sale
+price) stays in `ClosedTransaction`, and `toClosedTransaction()` translates its
+`IllegalArgumentException` into a 400. Do not re-state those rules as annotations: that gives one
+rule two homes that drift, and it is the same "adapters translate, they do not decide" line the
+persistence adapters hold.
+
+**`ClosingReceiptView` omits the revenue share block on a replay** rather than reporting zeros.
+`replayOf` returns `RevenueShareDistribution.none(...)` — it deliberately does not re-read the
+ledger — so rendering it would assert that the closing paid nobody, when the truth is that the
+response does not know. Same principle as the read side answering 404 instead of an empty dashboard.
+
 ## Event payloads are a published contract
 
 `EventSerializationConfiguration` defines a dedicated `eventObjectMapper`, injected by
@@ -117,6 +151,15 @@ set for an HTTP response would then silently change the format of every event, w
 new shapes interleaved in one table and nothing recording which is which.
 
 `AgentId` and `TransactionId` serialise as bare strings, `Money` as a JSON number.
+
+**Adding the web starter armed exactly the trap that comment predicted.** Boot's `ObjectMapper` is
+`@Primary` *and* `@ConditionalOnMissingBean`, so because `eventObjectMapper` already existed, Boot
+backed off entirely — leaving **no primary mapper at all** and the event mapper as the only
+candidate for serialising every HTTP response. Nothing looks wrong on the day; it is the next
+API-motivated Jackson tweak that silently rewrites the event contract. `WebSerializationConfiguration`
+declares the web mapper explicitly as `@Primary`, and `SerializationBoundaryIT` is the guard — watched
+failing with that bean removed, which is the only way a wiring test proves anything. The read side hit
+the identical trap; do not "simplify" either module down to one mapper.
 
 ## Conventions
 
@@ -128,5 +171,10 @@ new shapes interleaved in one table and nothing recording which is which.
   `nativeQuery` only where Postgres semantics are the point (the upserts).
 - Integration tests are `*IT` (Failsafe, needs Docker), unit tests `*Test` (Surefire). Extend
   `AbstractPostgresIT`, which starts one container for the whole suite.
+- **`TransactionControllerTest` stubs the port by hand and is not a third mock.** The controller
+  takes `RecordClosedTransaction` as a constructor argument, so "fail twice, then succeed" is a
+  small class rather than a mocking framework — which is the check the root `CLAUDE.md` asks for.
+  It exists only for what a real database cannot be asked to do on cue: lose the optimistic lock
+  five times running. Everything reachable without staging a failure belongs in `TransactionApiIT`.
 - Every index in the schema has a comment naming the query it serves. Add new ones the same
   way, or they become unremovable.
