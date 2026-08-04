@@ -132,6 +132,22 @@
         <version>${maven-compiler-plugin.version}</version>
         <configuration>
           <release>${maven.compiler.release}</release>
+          <!--
+            Retains method parameter names in the class files.
+
+            This is one of the things spring-boot-starter-parent would have configured, and
+            not inheriting from it means configuring it here instead. Without it Spring cannot
+            infer the name of a `@PathVariable String agentId` and fails at request time with
+            "Name for argument of type [java.lang.String] not specified" - a runtime error, in
+            the web layer only, from a compiler setting, which is a long way to travel to find
+            the cause.
+
+            Set at the reactor level rather than in the one module with controllers: the same
+            flag governs @RequestParam, @ConfigurationProperties constructor binding and
+            Jackson's non-record constructor binding, so a module acquiring any of those later
+            should not have to rediscover this.
+          -->
+          <parameters>true</parameters>
           <compilerArgs>
             <arg>-Xlint:all,-serial,-processing</arg>
           </compilerArgs>

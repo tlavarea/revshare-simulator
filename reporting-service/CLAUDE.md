@@ -11,9 +11,11 @@ types only.
 
 ```
 service/                   DashboardProjector (+ Impl) — the fold over the stream
+                           AgentDashboardQuery (+ Impl), AgentDashboardView — the read
 adapter/in/messaging/      DomainEventConsumer, DomainEventReader, EventTopics
+adapter/in/web/            AgentDashboardController, ApiExceptionHandler
 adapter/out/mongo/         repositories and the documents they store
-config/                    event deserialization, Mongo transaction manager, clock
+config/                    event deserialization, web serialization, Mongo transactions, clock
 ```
 
 Conventions follow `commission-service`: every `@Service` implements an interface, adapters
@@ -106,15 +108,46 @@ Not local DTOs. Three consequences worth keeping:
 3. This module must never import a calculator, a port, or anything from `commission-service`.
    The dependency is on the event vocabulary, nothing else.
 
+## Two ObjectMapper beans, and the one that must stay @Primary
+
+Adding the web starter armed a trap the write side's `EventSerializationConfiguration` had
+predicted in words. Boot's own `ObjectMapper` is `@Primary` **and** `@ConditionalOnMissingBean`.
+Because `eventObjectMapper` already exists, Boot backs off — and the result is not "two mappers,
+each used correctly", it is **no primary mapper at all**, leaving the event mapper as the only
+candidate and therefore the one Spring MVC serialises every HTTP response with.
+
+`WebSerializationConfiguration` declares the web mapper explicitly and marks it `@Primary`.
+`SerializationBoundaryIT` is the guard, watched failing with the bean removed. **Do not delete
+either, and do not tune `eventObjectMapper` to fix an API problem** — the payload format is a
+contract with events already durable in the outbox.
+
+## The read path is read-only, structurally
+
+`AgentDashboardController` exposes `GET` and nothing else. State changes by publishing a closing
+to `commission-service`; a mutating endpoint here would be a second way into the system with no
+cap arithmetic behind it, and the two models would immediately disagree. There is a test
+asserting `POST` is rejected.
+
+404 for an unknown agent is deliberate over an empty 200. This service learns about agents only
+from events, so it cannot distinguish "no such agent" from "an agent nothing has happened to" —
+and returning an empty dashboard would assert zero production as fact when the truth is that
+nothing is known.
+
 ## Testing
 
 - `DashboardProjectionIT` — the projection rules, driven straight against Mongo. No broker; Kafka
   delivers events but decides nothing about what they mean.
 - `EventStreamIT` — the delivery path once, end to end. Header dispatch, deserialization, the
   listener.
-- `ProjectionAtomicityIT` — the transaction. The **only** place in this repo with a mock, because
-  a mid-transaction infrastructure failure is not something a real Mongo can be asked for on cue.
+- `ProjectionAtomicityIT` — the transaction, with a mock, because a mid-transaction
+  infrastructure failure is not something a real Mongo can be asked for on cue.
 - `DomainEventReaderTest` — the wire format, as literal JSON.
+- `AgentDashboardControllerTest` — the HTTP contract as a `@WebMvcTest` slice with the query
+  stubbed. The second of the repository's two mocks: routing, status codes and JSON shape are
+  genuinely all that is under test, and the not-found case is a state of the query result rather
+  than of the database.
+- `AgentDashboardApiIT` — events in, JSON out, joining the two ends once.
+- `SerializationBoundaryIT` — the two mappers stay separate.
 
 `MongoDBContainer` starts once per suite and documents are cleared between tests. Clear the
 *documents*, not the collections: dropping a collection takes its TTL index with it.
