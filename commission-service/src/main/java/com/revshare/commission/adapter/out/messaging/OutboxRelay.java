@@ -31,10 +31,14 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <h2>Ordering</h2>
  *
- * <p>Two things preserve it, and both matter. Rows are claimed in {@code occurred_at} order and sent one at a time,
- * waiting for each acknowledgement before the next — so a batch cannot be reordered in flight. And the batch
- * <strong>stops at the first failure</strong> rather than skipping past it: if event three fails, events four and five
- * are left for the next poll, so a later event for an agent can never overtake an earlier one that has not landed yet.
+ * <p>Two things preserve it, and both matter. Rows are claimed in {@code (occurred_at, sequence_number)} order and sent
+ * one at a time, waiting for each acknowledgement before the next — so a batch cannot be reordered in flight. The
+ * sequence number matters because {@code occurred_at} alone ties: every event one closing emits shares a single
+ * {@code Instant}, so a commission event and the cap-threshold event it triggered sort equally on timestamp, and an
+ * {@code ORDER BY} tie has no guaranteed result. The sequence number is a Postgres identity value assigned at insert
+ * time, so it discriminates same-closing events even when nothing else on the row does. And the batch <strong>stops at
+ * the first failure</strong> rather than skipping past it: if event three fails, events four and five are left for the
+ * next poll, so a later event for an agent can never overtake an earlier one that has not landed yet.
  *
  * <p>The cost is throughput — a synchronous send per record. That is the right trade here. Reordering an agent's
  * commission events would corrupt a cumulative cap projection, and the volume is bounded by closings per second, which

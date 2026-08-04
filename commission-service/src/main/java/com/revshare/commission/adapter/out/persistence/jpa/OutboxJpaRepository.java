@@ -16,10 +16,12 @@ public interface OutboxJpaRepository extends JpaRepository<OutboxEntity, UUID> {
      * <p>Matches {@code ix_outbox_unpublished}, a partial index over unpublished rows only, so the poll stays a small
      * index scan no matter how much published history accumulates behind it.
      *
-     * <p>Ordering by {@code occurredAt} preserves per-aggregate causality on the way out: a cap-threshold event cannot
-     * overtake the commission event that caused it.
+     * <p>Ordering by {@code occurredAt} alone is not enough to preserve per-aggregate causality: every event a single
+     * closing emits shares one {@code Instant}, so a commission event and the cap-threshold event it triggered tie on
+     * that column, and a tie has no guaranteed order. {@code sequenceNumber} is a Postgres identity value assigned at
+     * insert time, so it breaks the tie in true insertion order even when every timestamp on the rows is identical.
      */
-    List<OutboxEntity> findByPublishedAtIsNullOrderByOccurredAtAsc(Limit limit);
+    List<OutboxEntity> findByPublishedAtIsNullOrderByOccurredAtAscSequenceNumberAsc(Limit limit);
 
     long countByPublishedAtIsNull();
 
@@ -40,11 +42,15 @@ public interface OutboxJpaRepository extends JpaRepository<OutboxEntity, UUID> {
      *
      * <p>Runs against {@code ix_outbox_unpublished}, the partial index over unpublished rows, so the claim stays a
      * small index scan no matter how much published history sits behind it.
+     *
+     * <p>Ordered by {@code (occurred_at, sequence_number)}, not {@code occurred_at} alone — see
+     * {@link #findByPublishedAtIsNullOrderByOccurredAtAscSequenceNumberAsc} for why a single closing's events can tie
+     * on the timestamp and need the sequence to break it.
      */
     @Query(value = """
                     SELECT * FROM outbox
                     WHERE published_at IS NULL
-                    ORDER BY occurred_at ASC
+                    ORDER BY occurred_at ASC, sequence_number ASC
                     LIMIT :batchSize
                     FOR UPDATE SKIP LOCKED
                     """, nativeQuery = true)
