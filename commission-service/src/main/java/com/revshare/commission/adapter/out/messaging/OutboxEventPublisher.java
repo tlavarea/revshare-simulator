@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.revshare.commission.adapter.out.persistence.entity.OutboxEntity;
 import com.revshare.commission.adapter.out.persistence.jpa.OutboxJpaRepository;
+import com.revshare.domain.event.AgentEnrolled;
+import com.revshare.domain.event.AgentTerminated;
 import com.revshare.domain.event.CapThresholdReached;
 import com.revshare.domain.event.CommissionCalculated;
 import com.revshare.domain.event.DomainEvent;
@@ -86,6 +88,8 @@ public class OutboxEventPublisher implements com.revshare.domain.port.out.Domain
             case CommissionCalculated ignored -> "commission";
             case CapThresholdReached ignored -> "commission";
             case RevenueShareDistributed ignored -> "revenue-share";
+            case AgentEnrolled ignored -> "agent";
+            case AgentTerminated ignored -> "agent";
         };
     }
 

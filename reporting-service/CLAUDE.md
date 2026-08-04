@@ -50,6 +50,48 @@ without it `@Transactional` on a Mongo call is *silently* a no-op — the projec
 and double-counts on redelivery. `MongoTransactionConfiguration` declares the bean and
 `ProjectionAtomicityIT` is the test that fails if it goes away. Do not delete either.
 
+## The downline is two populations, not one
+
+Each tier carries both, and neither substitutes for the other:
+
+- **`contributors`** — agents at that depth who have earned this agent something. Built from
+  `RevenueShareDistributed`, which is where the money is.
+- **`downline`** — every agent sponsored at that depth, earning or not, departed or not. Built from
+  `AgentEnrolled`, which is the only event that knows about an agent before they produce.
+
+The gap between the counts is the interesting figure. Thirty in the downline and two contributors
+describes a recruiting record with no income behind it, and collapsing them into one number loses
+exactly that.
+
+**`contributors` stays a subset by construction.** `TierView.add` registers the contributor in the
+roster too, because an award *is* proof of membership at that tier. Without it, every agent enrolled
+before the write side emitted `AgentEnrolled` would give their ancestors more contributors than
+downline. The join date stays null there — the award carries none, and guessing is worse than
+admitting it is unknown.
+
+**A departure marks, it never removes.** The hierarchy does not compress, so an agent who leaves
+keeps their depth forever and everyone beneath them keeps their tier. Deleting the entry would
+assert a tree shape the write side does not have, and would contradict awards still arriving through
+them from further down.
+
+**There is deliberately no live "producing frontline" count**, and this is the one place the
+temptation is real, because the tier-unlock thresholds are defined on exactly that number.
+Producing means $450 of gross in the trailing six months — a policy evaluated against a clock, which
+is a decision, which this module does not make. `contributorCount` is *not* that number either: it
+is lifetime earning, so an agent who produced two years ago and stopped still counts. The view
+serves `requiredToUnlock` from `RevenueShareTier` as plan data and stops there.
+
+## Fan-out: two events touch other agents' dashboards
+
+`RevenueShareDistributed` writes up to five beneficiary dashboards; `AgentEnrolled` and
+`AgentTerminated` write up to five ancestor dashboards plus the agent's own. Both walk the frozen
+sponsorship path by index — index 0 is tier 1 — and `forEachAncestorInReach` is the single place
+that conversion happens, which is why neither projection carries an off-by-one.
+
+The walk ends where `RevenueShareTier.atDepth` returns empty. Ancestors beyond the fifth are real
+and are in the path, but the dashboard is organised by the programme's five tiers and has no row for
+them.
+
 ## Idempotency
 
 Delivery is at-least-once, and most of this projection is additive, so redelivery must be
@@ -73,7 +115,8 @@ Worth knowing before adding a field to the dashboard:
 - **Absolute** — cap progress. `CommissionCalculated` carries the post-state, so the projection
   overwrites. Safe to replay, and per-agent partitioning means the last write really is latest.
 - **Accumulated** — production totals, revenue share earnings, downline membership. These add,
-  and are only correct because of the idempotency above.
+  and are only correct because of the idempotency above. Roster membership accumulates by *key*
+  rather than by sum, which is what makes a redelivered `AgentEnrolled` harmless.
 
 Getting this backwards is the failure that looks right in a demo: summing the cap balance makes
 an agent appear to cap on their second closing.
@@ -128,15 +171,22 @@ to `commission-service`; a mutating endpoint here would be a second way into the
 cap arithmetic behind it, and the two models would immediately disagree. There is a test
 asserting `POST` is rejected.
 
-404 for an unknown agent is deliberate over an empty 200. This service learns about agents only
-from events, so it cannot distinguish "no such agent" from "an agent nothing has happened to" —
-and returning an empty dashboard would assert zero production as fact when the truth is that
-nothing is known.
+404 for an unknown agent is deliberate over an empty 200: returning an empty dashboard would
+assert zero production as fact when the truth is that nothing is known.
+
+`AgentEnrolled` narrowed what that 404 means. An enrolled agent now gets a dashboard on the day
+they join, reading zero — and that zero is a fact. Only an agent nobody ever enrolled is absent.
+The `affiliation` block is null for agents this service learned about from a closing or an award
+instead, which is every agent who predates the lifecycle events; present-and-empty is not the
+same as absent, so it is served as null rather than a zeroed record.
 
 ## Testing
 
 - `DashboardProjectionIT` — the projection rules, driven straight against Mongo. No broker; Kafka
   delivers events but decides nothing about what they mean.
+- `DownlineRosterProjectionIT` — the org chart half: enrolment fan-out, the five-tier reach
+  limit, departures marked rather than removed, and contributors staying a subset of the
+  downline even with no enrolment event.
 - `EventStreamIT` — the delivery path once, end to end. Header dispatch, deserialization, the
   listener.
 - `ProjectionAtomicityIT` — the transaction, with a mock, because a mid-transaction

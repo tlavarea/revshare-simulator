@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 /**
  * The read side's way in. Consumes the domain event stream and hands each event to the projector.
  *
- * <h2>One listener over three topics</h2>
+ * <h2>One listener over four topics</h2>
  *
  * <p>Rather than a listener per topic, because ordering is guaranteed per partition and never across topics, so
  * separate listeners would buy nothing but three copies of this method. The events that must stay ordered relative to
@@ -45,7 +45,7 @@ public class DomainEventConsumer {
     }
 
     @KafkaListener(
-            topics = {EventTopics.COMMISSION, EventTopics.REVENUE_SHARE, EventTopics.TRANSACTION},
+            topics = {EventTopics.COMMISSION, EventTopics.REVENUE_SHARE, EventTopics.TRANSACTION, EventTopics.AGENT},
             groupId = "${revshare.reporting.consumer-group:reporting-service}")
     public void onEvent(ConsumerRecord<String, String> record) {
         String eventType = header(record, DomainEventReader.EVENT_TYPE_HEADER);

@@ -9,9 +9,10 @@ its driven ports.
 ## Layout
 
 ```
-service/                   RecordClosedTransactionService, BeneficiaryStandingResolverImpl
-                           (+ their interfaces)
-adapter/in/web/            TransactionController, the request/response shapes, ApiExceptionHandler
+service/                   RecordClosedTransactionService, AgentAffiliationService,
+                           BeneficiaryStandingResolverImpl (+ their interfaces)
+adapter/in/web/            TransactionController, AgentController, the request/response
+                           shapes, ApiExceptionHandler
 adapter/out/persistence/   entities, Spring Data repositories, port adapters, the mapper
 adapter/out/messaging/     OutboxEventPublisher
 config/                    domain beans, event and web serialization
@@ -112,7 +113,13 @@ caught (see trap 1).
 
 ## The API
 
-`POST /transactions` is the whole surface: one endpoint for the one use case. `TransactionController`
+```
+POST /agents                        enrol, deriving the sponsorship path from the sponsor
+POST /agents/{agentId}/termination  end an affiliation, as of a date
+POST /transactions                  price a closing
+```
+
+`POST /transactions` is the original surface, one endpoint for the one use case. `TransactionController`
 parses, calls the `RecordClosedTransaction` port, and maps the outcome to a status. It does no
 arithmetic and opens no transaction of its own.
 
@@ -137,6 +144,22 @@ price) stays in `ClosedTransaction`, and `toClosedTransaction()` translates its
 `IllegalArgumentException` into a 400. Do not re-state those rules as annotations: that gives one
 rule two homes that drift, and it is the same "adapters translate, they do not decide" line the
 persistence adapters hold.
+
+**Enrolment derives the sponsorship path and never accepts one.** `AgentAffiliationService` takes a
+sponsor *id* and reads that agent to extend their path by one. A client-supplied path would let the
+hierarchy be asserted rather than computed, and since the path is frozen at enrolment there is no
+later correction — every tier and rate downstream would be only as trustworthy as that request.
+
+**Re-enrolling an id is a 409, not an idempotent replay.** Unlike a closing, the request carries a
+name and email that may differ from the stored ones, so accepting it would either overwrite a record
+from what looks like a retry or discard the new values while reporting success. Two layers guard it,
+the same as the closing path: the service's `findById` check, and the primary key for two enrolments
+racing — the second surfaces as a `DataIntegrityViolationException`, handled in the web layer
+because trap 1 means nothing can run inside the aborted transaction.
+
+**A terminated sponsor still sponsors.** Enrolling beneath someone who has left is allowed and
+tested. Termination stops the sponsor *collecting*; it does not remove them from the tree. Rejecting
+the enrolment would compress the hierarchy by the back door.
 
 **`ClosingReceiptView` omits the revenue share block on a replay** rather than reporting zeros.
 `replayOf` returns `RevenueShareDistribution.none(...)` — it deliberately does not re-read the

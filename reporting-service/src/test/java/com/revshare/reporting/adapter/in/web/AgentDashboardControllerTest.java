@@ -51,6 +51,7 @@ class AgentDashboardControllerTest {
     private static AgentDashboardView view() {
         return new AgentDashboardView(
                 AGENT,
+                new AgentDashboardView.Affiliation(LocalDate.of(2025, 3, 14), "a-sponsor", null, true),
                 new AgentDashboardView.CapProgress(
                         new AgentDashboardView.CapYear(LocalDate.of(2025, 3, 14), LocalDate.of(2026, 3, 14), 0),
                         new BigDecimal("1500.00"),
@@ -74,7 +75,20 @@ class AgentDashboardControllerTest {
                                 new BigDecimal("900.00"),
                                 BigDecimal.ZERO,
                                 1,
-                                List.of("a-contributor")))),
+                                List.of("a-contributor"),
+                                3,
+                                2,
+                                0,
+                                List.of(
+                                        new AgentDashboardView.DownlineMember(
+                                                "a-contributor", LocalDate.of(2025, 4, 1), null, true),
+                                        new AgentDashboardView.DownlineMember(
+                                                "a-quiet-one", LocalDate.of(2025, 5, 2), null, true),
+                                        new AgentDashboardView.DownlineMember(
+                                                "a-departed-one",
+                                                LocalDate.of(2025, 1, 3),
+                                                LocalDate.of(2025, 6, 4),
+                                                false))))),
                 Instant.parse("2025-04-01T17:30:00Z"));
     }
 
@@ -108,6 +122,47 @@ class AgentDashboardControllerTest {
         mvc.perform(get("/agents/{id}/dashboard", AGENT))
                 .andExpect(jsonPath("$.capProgress.capYear.start").value("2025-03-14"))
                 .andExpect(jsonPath("$.lastProjectedAt").value("2025-04-01T17:30:00Z"));
+    }
+
+    @Test
+    void theDownlineAndTheContributorsAreServedSeparately() throws Exception {
+        when(dashboards.findByAgentId(any())).thenReturn(Optional.of(view()));
+
+        // The gap between the two is the point: three sponsored at tier 1, one of whom has ever
+        // earned this agent anything. Collapsing them into one number would lose the fact that
+        // two people were recruited and produced nothing.
+        mvc.perform(get("/agents/{id}/dashboard", AGENT))
+                .andExpect(jsonPath("$.revenueShare.tiers[0].contributorCount").value(1))
+                .andExpect(jsonPath("$.revenueShare.tiers[0].downlineCount").value(3))
+                .andExpect(
+                        jsonPath("$.revenueShare.tiers[0].activeDownlineCount").value(2))
+                .andExpect(jsonPath("$.revenueShare.tiers[0].downline.length()").value(3));
+    }
+
+    @Test
+    void aDepartedDownlineMemberIsListedRatherThanRemoved() throws Exception {
+        when(dashboards.findByAgentId(any())).thenReturn(Optional.of(view()));
+
+        // The hierarchy does not compress, so someone who left keeps their depth and everyone
+        // beneath them keeps their tier. Dropping them from the roster would assert a tree
+        // shape the write side does not have.
+        mvc.perform(get("/agents/{id}/dashboard", AGENT))
+                .andExpect(
+                        jsonPath("$.revenueShare.tiers[0].downline[2].agentId").value("a-departed-one"))
+                .andExpect(
+                        jsonPath("$.revenueShare.tiers[0].downline[2].active").value(false))
+                .andExpect(jsonPath("$.revenueShare.tiers[0].downline[2].terminatedOn")
+                        .value("2025-06-04"));
+    }
+
+    @Test
+    void theAgentsOwnAffiliationIsServed() throws Exception {
+        when(dashboards.findByAgentId(any())).thenReturn(Optional.of(view()));
+
+        mvc.perform(get("/agents/{id}/dashboard", AGENT))
+                .andExpect(jsonPath("$.affiliation.joinedOn").value("2025-03-14"))
+                .andExpect(jsonPath("$.affiliation.sponsorId").value("a-sponsor"))
+                .andExpect(jsonPath("$.affiliation.active").value(true));
     }
 
     @Test

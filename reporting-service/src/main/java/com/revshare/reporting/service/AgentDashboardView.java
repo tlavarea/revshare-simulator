@@ -23,6 +23,7 @@ import java.util.Map;
  */
 public record AgentDashboardView(
         String agentId,
+        Affiliation affiliation,
         CapProgress capProgress,
         Production production,
         RevenueShare revenueShare,
@@ -53,7 +54,21 @@ public record AgentDashboardView(
     /**
      * One tier's earnings and the agents at that depth.
      *
-     * @param contributors the agents whose production earned this, which is the downline at this depth
+     * <p><strong>{@code downline} and {@code contributors} are different populations and both are served.</strong>
+     * {@code downline} is everyone sponsored at this depth; {@code contributors} is the subset who have actually earned
+     * this agent something. The gap between the two counts is the most useful number on the tier — thirty in the
+     * downline and two contributors describes a recruiting record with no income behind it, and neither figure alone
+     * says that.
+     *
+     * <p>{@code requiredToUnlock} is plan data, read from {@code RevenueShareTier} exactly as {@code rate} is. It is
+     * <em>not</em> paired with a live "producing frontline" count, and that omission is deliberate: producing means
+     * $450 of gross in the trailing six months, which is a policy evaluated against a clock, and deciding it here would
+     * put a business rule in the read side. {@code contributorCount} is emphatically not that number — it is lifetime
+     * earning, so an agent who produced two years ago and stopped still counts. Whether a tier is actually unlocked is
+     * the write side's answer, and it is already visible in the forfeit reason on any award.
+     *
+     * @param contributors the agents whose production has earned this agent something
+     * @param downline every agent sponsored at this depth, earning or not, departed or not
      */
     public record Tier(
             String tier,
@@ -62,7 +77,30 @@ public record AgentDashboardView(
             BigDecimal awarded,
             BigDecimal forfeited,
             int contributorCount,
-            List<String> contributors) {}
+            List<String> contributors,
+            int downlineCount,
+            int activeDownlineCount,
+            int requiredToUnlock,
+            List<DownlineMember> downline) {}
+
+    /**
+     * One agent in the downline.
+     *
+     * <p>{@code joinedOn} is null when membership was learned from an award rather than from an enrolment — true for
+     * every agent who joined before the write side began announcing enrolments. {@code terminatedOn} is null while the
+     * agent is still affiliated, and a departed agent is <em>listed, not removed</em>: the hierarchy does not compress,
+     * so they keep their depth and everyone beneath them keeps their tier.
+     */
+    public record DownlineMember(String agentId, LocalDate joinedOn, LocalDate terminatedOn, boolean active) {}
+
+    /**
+     * The agent's own standing with the brokerage.
+     *
+     * <p>Null for an agent this service learned about only from a closing or an award, which is every agent enrolled
+     * before enrolments were announced. Present and empty is not the same as absent, so it is served as null rather
+     * than as a zeroed record.
+     */
+    public record Affiliation(LocalDate joinedOn, String sponsorId, LocalDate terminatedOn, boolean active) {}
 
     /**
      * Renders a stored dashboard.
@@ -84,8 +122,17 @@ public record AgentDashboardView(
                 : new CapYear(
                         storedCap.getCapYearStart(), storedCap.getCapYearEndExclusive(), storedCap.getCapYearOrdinal());
 
+        var storedAffiliation = document.getAffiliation();
+
         return new AgentDashboardView(
                 document.getAgentId(),
+                storedAffiliation.getJoinedOn() == null
+                        ? null
+                        : new Affiliation(
+                                storedAffiliation.getJoinedOn(),
+                                storedAffiliation.getSponsorId(),
+                                storedAffiliation.getTerminatedOn(),
+                                storedAffiliation.isActive()),
                 new CapProgress(
                         capYear,
                         storedCap.getContributed(),
@@ -117,8 +164,20 @@ public record AgentDashboardView(
                             found == null ? BigDecimal.ZERO : found.getAwarded(),
                             found == null ? BigDecimal.ZERO : found.getForfeited(),
                             found == null ? 0 : found.getContributorCount(),
-                            found == null ? List.of() : List.copyOf(found.getContributors()));
+                            found == null ? List.of() : List.copyOf(found.getContributors()),
+                            found == null ? 0 : found.getDownlineCount(),
+                            found == null ? 0 : found.getActiveDownlineCount(),
+                            tier.producingFrontlineRequired(),
+                            found == null ? List.of() : membersOf(found));
                 })
+                .toList();
+    }
+
+    /** Renders one tier's roster, nearest thing to a stable order the stored map can give: insertion order. */
+    private static List<DownlineMember> membersOf(AgentDashboardDocument.TierView tier) {
+        return tier.getDownline().values().stream()
+                .map(member -> new DownlineMember(
+                        member.getAgentId(), member.getJoinedOn(), member.getTerminatedOn(), member.isActive()))
                 .toList();
     }
 }

@@ -17,7 +17,12 @@ import java.util.UUID;
  * replaying an event log must reproduce the original timestamps, not stamp everything with the moment of the replay.
  */
 public sealed interface DomainEvent
-        permits TransactionClosed, CommissionCalculated, CapThresholdReached, RevenueShareDistributed {
+        permits TransactionClosed,
+                CommissionCalculated,
+                CapThresholdReached,
+                RevenueShareDistributed,
+                AgentEnrolled,
+                AgentTerminated {
 
     /** Unique per emission. The consumer's idempotency key. */
     UUID eventId();

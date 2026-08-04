@@ -30,7 +30,7 @@ com/revshare/domain/
 ├── revshare/     RevenueShareTier, RevenueSharePlan, RevenueShareDownline, RevenueShareAward,
 │                 RevenueShareDistribution, ProducingAgentPolicy, BeneficiaryStanding,
 │                 ForfeitReason, RevenueShareCalculator
-├── event/        DomainEvent (sealed) + the four event records
+├── event/        DomainEvent (sealed) + the six event records
 └── port/out/     AgentRepository, CapProgressRepository, RevenueShareLedger,
                   ProductionHistory, DomainEventPublisher
 ```

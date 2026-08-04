@@ -1,7 +1,9 @@
 package com.revshare.commission.adapter.in.web;
 
 import com.revshare.commission.service.RecordClosedTransactionService;
+import com.revshare.domain.port.in.AgentAffiliation;
 import java.util.List;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -40,6 +42,86 @@ public class ApiExceptionHandler {
     ProblemDetail malformedClosing(RecordClosingRequest.MalformedClosingException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
         problem.setTitle("Invalid closing");
+        return problem;
+    }
+
+    /**
+     * The enrolment names an agent as their own sponsor, or is otherwise refused by the domain.
+     *
+     * <p>404 for a sponsor that does not exist, on the same reasoning as the unknown agent above: the request is fine,
+     * the brokerage simply has no such agent to enrol beneath.
+     */
+    @ExceptionHandler(EnrollAgentRequest.MalformedEnrollmentException.class)
+    ProblemDetail malformedEnrollment(EnrollAgentRequest.MalformedEnrollmentException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+        problem.setTitle("Invalid enrolment");
+        return problem;
+    }
+
+    @ExceptionHandler(AgentAffiliation.UnknownSponsorException.class)
+    ProblemDetail unknownSponsor(AgentAffiliation.UnknownSponsorException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+        problem.setTitle("Unknown sponsor");
+        return problem;
+    }
+
+    /**
+     * The port's own unknown-agent failure, distinct from the closing path's.
+     *
+     * <p>Two exception types for one condition because each port states its own contract — the same reason
+     * {@code CapProgressRepository} and {@code CommissionSplitRepository} declare theirs. They deliberately render
+     * identically: a caller has no interest in which use case failed to find the agent.
+     */
+    @ExceptionHandler(AgentAffiliation.UnknownAgentException.class)
+    ProblemDetail unknownAgentOnAffiliation(AgentAffiliation.UnknownAgentException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+        problem.setTitle("Unknown agent");
+        return problem;
+    }
+
+    /** Enrolling an id that is already enrolled. */
+    @ExceptionHandler(AgentAffiliation.AgentAlreadyEnrolledException.class)
+    ProblemDetail alreadyEnrolled(AgentAffiliation.AgentAlreadyEnrolledException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        problem.setTitle("Already enrolled");
+        return problem;
+    }
+
+    /**
+     * A state transition the aggregate refuses — terminating an agent who has already left.
+     *
+     * <p>409 rather than 400: the request is well-formed and would have been valid earlier. Silently accepting it would
+     * let a second, later date overwrite the real departure, which is a fact other calculations depend on.
+     */
+    @ExceptionHandler(IllegalStateException.class)
+    ProblemDetail illegalTransition(IllegalStateException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        problem.setTitle("Invalid state transition");
+        return problem;
+    }
+
+    /**
+     * Two enrolments of the same id raced each other past the service's own check.
+     *
+     * <p>The second layer of the duplicate guard, and the reason it is handled here rather than in the service: a
+     * constraint violation marks the Postgres transaction failed, so nothing in it can run afterwards — not even the
+     * read that would confirm what happened. By the time this handler sees the exception the transaction has rolled
+     * back, which is the only place it is safe to answer at all. Rendered as the same 409 as the check that usually
+     * catches it first, because the caller's situation is identical.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    ProblemDetail constraintViolation(DataIntegrityViolationException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.CONFLICT, "the record conflicts with one that already exists");
+        problem.setTitle("Conflict");
+        return problem;
+    }
+
+    /** The path variable is not a UUID. */
+    @ExceptionHandler(AgentController.MalformedAgentIdException.class)
+    ProblemDetail malformedAgentId(AgentController.MalformedAgentIdException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+        problem.setTitle("Malformed agent id");
         return problem;
     }
 

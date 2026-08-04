@@ -2,8 +2,11 @@ package com.revshare.reporting;
 
 import com.revshare.domain.agent.AgentId;
 import com.revshare.domain.agent.CapYear;
+import com.revshare.domain.agent.SponsorshipPath;
 import com.revshare.domain.commission.CapProgress;
 import com.revshare.domain.commission.CommissionSplit;
+import com.revshare.domain.event.AgentEnrolled;
+import com.revshare.domain.event.AgentTerminated;
 import com.revshare.domain.event.CapThresholdReached;
 import com.revshare.domain.event.CommissionCalculated;
 import com.revshare.domain.event.RevenueShareDistributed;
@@ -45,6 +48,37 @@ public final class TestEvents {
 
     public static TransactionId transaction() {
         return TransactionId.newId();
+    }
+
+    /**
+     * An enrolment beneath a chain of ancestors, nearest first.
+     *
+     * <p>The path is built through {@link SponsorshipPath} rather than assembled as a list, so a fixture that would
+     * describe an impossible tree — an agent in their own upline, a duplicated ancestor — cannot be written here by
+     * accident. That is the same reason every other fixture in this class goes through a real constructor.
+     */
+    public static AgentEnrolled enrolled(AgentId agentId, LocalDate joinedOn, AgentId... ancestorsNearestFirst) {
+        return new AgentEnrolled(
+                UUID.randomUUID(),
+                Instant.parse("2025-01-01T00:00:00Z"),
+                agentId,
+                new SponsorshipPath(List.of(ancestorsNearestFirst)),
+                joinedOn);
+    }
+
+    /** An agent at the top of their own tree. */
+    public static AgentEnrolled enrolledAtTheTop(AgentId agentId, LocalDate joinedOn) {
+        return enrolled(agentId, joinedOn);
+    }
+
+    /** A departure. The path travels so every ancestor's roster can be marked. */
+    public static AgentTerminated terminated(AgentId agentId, LocalDate on, AgentId... ancestorsNearestFirst) {
+        return new AgentTerminated(
+                UUID.randomUUID(),
+                Instant.parse("2025-01-01T00:00:00Z"),
+                agentId,
+                new SponsorshipPath(List.of(ancestorsNearestFirst)),
+                on);
     }
 
     /**
