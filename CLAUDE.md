@@ -21,9 +21,11 @@ Modules:
   enforced by the build. See `domain-core/CLAUDE.md`.
 - **`seed-generator/`** — deterministic synthetic data. See `seed-generator/CLAUDE.md`.
 - **`commission-service/`** — the write side: Postgres, JPA, a transactional outbox relayed to
-  Kafka by `OutboxRelay`, and `POST /transactions`. See `commission-service/CLAUDE.md`.
+  Kafka by `OutboxRelay`, `POST /transactions`, and agent enrolment. See
+  `commission-service/CLAUDE.md`.
 - **`reporting-service/`** — the read side: Kafka consumer folding the event stream into MongoDB
-  dashboards, served by `GET /agents/{id}/dashboard`. See `reporting-service/CLAUDE.md`.
+  dashboards — earnings and the tier-grouped org chart — served by
+  `GET /agents/{id}/dashboard`. See `reporting-service/CLAUDE.md`.
 
 `README.md` is the reviewer-facing document and carries the full domain explanation, the
 architecture diagram, and the table of documented assumptions. **When a business rule or an
@@ -79,7 +81,7 @@ with behaviour.** That distinction is deliberate and load-bearing — see
 
 ```
                         writes                          reads
-                    POST /transactions        GET /agents/{id}/dashboard
+                POST /agents, /transactions   GET /agents/{id}/dashboard
                              ▼                             ▲
  ┌──────────────┐   ┌──────────────────┐          ┌───────────────────┐
  │ seed-        │──▶│ commission-      │  Kafka   │ reporting-service │
@@ -116,7 +118,9 @@ the service modules get built:
   delivery must not double-pay an upline.
 - **Partitioning** — commission events key on the *agent* (cap progress is cumulative and
   order-sensitive); revenue share events key on the *contributor* (one event concerns up to
-  five beneficiaries, so no beneficiary can own the ordering).
+  five beneficiaries, so no beneficiary can own the ordering); agent lifecycle events key on
+  the *agent themselves*, so an enrolment is never consumed after the termination that
+  followed it.
 
 ## Testing
 

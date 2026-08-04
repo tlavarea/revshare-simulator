@@ -26,12 +26,14 @@ final class EventTopics {
     static final String COMMISSION = "revshare.commission.events";
     static final String REVENUE_SHARE = "revshare.revenue-share.events";
     static final String TRANSACTION = "revshare.transaction.events";
+    static final String AGENT = "revshare.agent.events";
 
     /** Keyed by the {@code aggregate_type} column written by {@code OutboxEventPublisher}. */
     private static final Map<String, String> BY_AGGREGATE_TYPE = Map.of(
             "commission", COMMISSION,
             "revenue-share", REVENUE_SHARE,
-            "transaction", TRANSACTION);
+            "transaction", TRANSACTION,
+            "agent", AGENT);
 
     private EventTopics() {}
 

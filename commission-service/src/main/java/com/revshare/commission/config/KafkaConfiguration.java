@@ -50,6 +50,19 @@ public class KafkaConfiguration {
         return topic("revshare.transaction.events");
     }
 
+    /**
+     * Agent lifecycle: enrolments and terminations.
+     *
+     * <p>Its own topic rather than sharing the commission one, because the two carry different meanings for the same
+     * key. Both are keyed by agent, so co-locating them would be ordered correctly — but a consumer that wants the org
+     * chart and not the money would have to read and discard every closing in the brokerage to get it, and a roster
+     * rebuild would replay the entire commission history.
+     */
+    @Bean
+    public NewTopic agentEventsTopic() {
+        return topic("revshare.agent.events");
+    }
+
     private NewTopic topic(String name) {
         return TopicBuilder.name(name).partitions(partitions).replicas(replicas).build();
     }

@@ -2,20 +2,26 @@ package com.revshare.reporting.service;
 
 import com.revshare.domain.agent.AgentId;
 import com.revshare.domain.agent.CapYear;
+import com.revshare.domain.agent.SponsorshipPath;
 import com.revshare.domain.commission.CapProgress;
 import com.revshare.domain.commission.CommissionSplit;
+import com.revshare.domain.event.AgentEnrolled;
+import com.revshare.domain.event.AgentTerminated;
 import com.revshare.domain.event.CapThresholdReached;
 import com.revshare.domain.event.CommissionCalculated;
 import com.revshare.domain.event.DomainEvent;
 import com.revshare.domain.event.RevenueShareDistributed;
 import com.revshare.domain.event.TransactionClosed;
 import com.revshare.domain.revshare.RevenueShareAward;
+import com.revshare.domain.revshare.RevenueShareTier;
 import com.revshare.reporting.adapter.out.mongo.AgentDashboardMongoRepository;
 import com.revshare.reporting.adapter.out.mongo.ProcessedEventMongoRepository;
 import com.revshare.reporting.adapter.out.mongo.document.AgentDashboardDocument;
 import com.revshare.reporting.adapter.out.mongo.document.ProcessedEventDocument;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
+import java.util.function.BiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -90,6 +96,8 @@ public class DashboardProjectorImpl implements DashboardProjector {
             case CommissionCalculated e -> project(e, now);
             case CapThresholdReached e -> project(e, now);
             case RevenueShareDistributed e -> project(e, now);
+            case AgentEnrolled e -> project(e, now);
+            case AgentTerminated e -> project(e, now);
             case TransactionClosed e -> ignore(e);
         }
 
@@ -166,6 +174,83 @@ public class DashboardProjectorImpl implements DashboardProjector {
 
             dashboard.touch(now);
             dashboards.save(dashboard);
+        }
+    }
+
+    /**
+     * A new agent: their own dashboard, and a downline entry on every ancestor within reach.
+     *
+     * <p>This is the second fan-out in the projector, and the one that makes the org chart possible. The event carries
+     * the whole frozen sponsorship path, so placing the agent is an indexed walk rather than a lookup: the ancestor at
+     * index 0 gains a tier 1 member, index 1 a tier 2 member, and so on. No tree is traversed and nothing is derived —
+     * the write side already decided the shape, and this copies it.
+     *
+     * <p>Stops at {@code REVENUE_SHARE_DEPTH}. Ancestors beyond the fifth are real and are recorded in the path, but
+     * the dashboard is organised by the tiers of the revenue share programme and has no row to put them in. Writing
+     * them anywhere would invent a sixth tier the programme does not have.
+     *
+     * <p>The agent's own dashboard is created here even though it is empty, which is a deliberate change in what a 404
+     * from the read API means: an enrolled agent who has never closed anything now has a dashboard reading zero, and
+     * that zero is now a fact rather than an assumption. Only an agent nobody has ever enrolled is absent.
+     */
+    private void project(AgentEnrolled event, Instant now) {
+        AgentDashboardDocument own = loadOrCreate(event.agentId());
+        own.getAffiliation()
+                .enrolled(
+                        event.joinedOn(),
+                        event.sponsorId().map(AgentId::toString).orElse(null));
+        own.touch(now);
+        dashboards.save(own);
+
+        forEachAncestorInReach(event.sponsorshipPath(), (ancestor, tier) -> {
+            AgentDashboardDocument dashboard = loadOrCreate(ancestor);
+            dashboard
+                    .getRevenueShare()
+                    .addDownlineMember(tier.name(), event.agentId().toString(), event.joinedOn());
+            dashboard.touch(now);
+            dashboards.save(dashboard);
+        });
+    }
+
+    /**
+     * An agent left: marked departed on their own dashboard and on every ancestor's roster.
+     *
+     * <p><strong>Marked, not removed.</strong> The hierarchy does not compress — an agent who leaves stays at their
+     * depth forever, their downline keeps its tier beneath them, and their upline keeps earning through them. Deleting
+     * the entry would assert a tree shape the write side does not have, and would make a roster disagree with the
+     * awards still arriving through the departed agent.
+     */
+    private void project(AgentTerminated event, Instant now) {
+        AgentDashboardDocument own = loadOrCreate(event.agentId());
+        own.getAffiliation().terminated(event.terminatedOn());
+        own.touch(now);
+        dashboards.save(own);
+
+        forEachAncestorInReach(event.sponsorshipPath(), (ancestor, tier) -> {
+            AgentDashboardDocument dashboard = loadOrCreate(ancestor);
+            dashboard
+                    .getRevenueShare()
+                    .markDownlineMemberDeparted(tier.name(), event.agentId().toString(), event.terminatedOn());
+            dashboard.touch(now);
+            dashboards.save(dashboard);
+        });
+    }
+
+    /**
+     * Visits each ancestor the revenue share programme reaches, with the tier they occupy.
+     *
+     * <p>Index 0 of the path is tier 1, which is the one place this module converts between the two conventions. Doing
+     * it here, once, is why neither projection above contains an off-by-one waiting to happen.
+     */
+    private static void forEachAncestorInReach(SponsorshipPath path, BiConsumer<AgentId, RevenueShareTier> visit) {
+        List<AgentId> ancestors = path.ancestorsNearestFirst();
+
+        for (int index = 0; index < ancestors.size(); index++) {
+            AgentId ancestor = ancestors.get(index);
+            // Empty past the fifth tier, which is what ends the walk. Asking the enum rather
+            // than comparing against REVENUE_SHARE_DEPTH keeps the programme's reach defined
+            // in one place: a sixth tier would extend this loop without an edit here.
+            RevenueShareTier.atDepth(index + 1).ifPresent(tier -> visit.accept(ancestor, tier));
         }
     }
 

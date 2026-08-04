@@ -19,10 +19,10 @@ of it leaving the company.
 
 | Module | State |
 | --- | --- |
-| `domain-core` | Complete. Framework-free hexagonal core, 74 unit tests. |
+| `domain-core` | Complete. Framework-free hexagonal core, 81 unit tests. |
 | `seed-generator` | Complete. Deterministic synthetic data, CLI, 19 tests. |
-| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, and a closing API. 49 tests. |
-| `reporting-service` | Read side. Kafka consumer, MongoDB projections, transactional idempotent fold, and a read-only dashboard API. 46 tests. |
+| `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, a closing API, and agent enrolment. 72 tests. |
+| `reporting-service` | Read side. Kafka consumer, MongoDB projections, transactional idempotent fold, and a read-only dashboard API with the tier-grouped org chart. 63 tests. |
 
 ## Quick start
 
@@ -117,7 +117,7 @@ agent's earnings would depend on their upline's sales activity.
 
 ```
                         writes                          reads
-                    POST /transactions        GET /agents/{id}/dashboard
+                POST /agents, /transactions   GET /agents/{id}/dashboard
                              ▼                             ▲
  ┌──────────────┐   ┌──────────────────┐          ┌───────────────────┐
  │ seed-        │──▶│ commission-      │  Kafka   │ reporting-service │
@@ -183,7 +183,9 @@ domain-core/src/main/java/com/revshare/domain/
 ├── revshare/     RevenueShareTier, RevenueSharePlan, RevenueShareDownline,
 │                 ProducingAgentPolicy, RevenueShareCalculator, RevenueShareAward
 ├── event/        TransactionClosed → CommissionCalculated → CapThresholdReached
-│                 → RevenueShareDistributed   (sealed interface, exhaustive switch)
+│                 → RevenueShareDistributed, AgentEnrolled, AgentTerminated
+│                 (sealed interface, exhaustive switch)
+├── port/in/      RecordClosedTransaction, AgentAffiliation
 └── port/out/     AgentRepository, CapProgressRepository, RevenueShareLedger,
                   ProductionHistory, DomainEventPublisher
 ```
@@ -208,10 +210,27 @@ see them:
 ### Writing to it
 
 ```
-POST /transactions
+POST /agents                        enrol an agent, beneath a sponsor or at the top of a tree
+POST /agents/{agentId}/termination  end an affiliation, as of a date
+POST /transactions                  price a closing and distribute the revenue share it funds
 ```
 
-One endpoint, because there is one use case. The body is a closing — agent, date, sale price, gross
+**Enrolment derives the sponsorship path; it never accepts one.** The request carries a sponsor
+*id*, and the service reads that agent to extend their path by one. Letting a client assert a path
+would make every tier and every revenue share rate downstream only as trustworthy as the request
+that created the agent — and the path is frozen at enrolment, so there is no later correction.
+
+**Termination is `POST /{id}/termination`, not `DELETE`.** Nothing is deleted. The agent record
+persists, their downline keeps its place beneath them, and their upline keeps earning through them;
+what ends is their own ability to collect. A `DELETE` would say the opposite of all three. It takes
+a date rather than assuming "now", because eligibility is evaluated against when the affiliation
+actually ended.
+
+Re-enrolling an existing id is a **409, not an idempotent replay** — unlike a closing, the request
+carries a name and an email that may differ from the stored ones, so accepting it would either
+overwrite a record from what looks like a retry or discard the new values while reporting success.
+
+The closing endpoint is the one the rest of this section describes. The body is a closing — agent, date, sale price, gross
 commission, side — and the response is the whole receipt: the split decomposed into cap contribution
 and post-cap fee, the cap progress against the anniversary window, and every revenue share award the
 closing funded. All of it is already computed when the transaction commits, so making a caller fetch
@@ -282,11 +301,32 @@ production totals, and revenue share earnings with **all five tiers always prese
 client rendering a five-tier programme should not have to know that five is the number or treat
 an absent key differently from a zero.
 
+**Each tier carries two populations, and neither substitutes for the other.** `downline` is every
+agent sponsored at that depth, built from `AgentEnrolled`; `contributors` is the subset who have
+actually earned this agent something, built from revenue share awards. The gap between the counts
+is the most useful number on the tier — thirty in the downline and two contributors describes a
+recruiting record with no income behind it, and one figure alone cannot say that.
+
+What the dashboard deliberately does **not** offer is a live "producing frontline" count. Producing
+means $450 of gross in the trailing six months: a policy evaluated against a clock, and deciding it
+in the read side would put a business rule in the module whose whole discipline is that it holds
+none. `contributorCount` is emphatically not that number either — it is lifetime earning, so an
+agent who produced two years ago and stopped still counts. The tier's `requiredToUnlock` is served
+as plan data and the decision stays where the policy and the clock are.
+
+A departed agent is **listed, not removed**. The hierarchy does not compress, so someone who leaves
+keeps their depth and everyone beneath them keeps their tier; deleting the entry would assert a tree
+shape the write side does not have and would contradict the awards still arriving through them.
+
 The service is read-only by construction, not by omission. State changes by publishing a closing
 to `commission-service`; a mutating endpoint here would be a second way into the system with no
-cap arithmetic behind it. A missing agent is a 404 rather than an empty 200 — this service learns
-about agents only from events, so it genuinely cannot distinguish "no such agent" from "an agent
-nothing has happened to", and an empty dashboard would assert zero production as fact.
+cap arithmetic behind it. A missing agent is a 404 rather than an empty 200 — an empty dashboard
+would assert zero production as fact when the truth is that nothing is known.
+
+`AgentEnrolled` narrowed what that 404 means, and deliberately. An enrolled agent who has never
+closed anything now has a dashboard reading zero from the day they joined, and that zero is a fact
+rather than an assumption. Only an agent nobody has ever enrolled is absent — which, for a
+brokerage that enrols through this API, is genuinely "no such agent".
 
 **Adding the web starter armed a trap the write side had already named in a comment.** Boot's
 `ObjectMapper` is `@Primary` *and* `@ConditionalOnMissingBean`; because `eventObjectMapper`
@@ -380,13 +420,15 @@ read as decisions rather than oversights:
 | What does "production" mean in the $450 policy? | Gross commission income from closings in the window — the only measure independent of cap status. | `ProducingAgentPolicy` |
 | Where do forfeited amounts go? | They stay with the company; they do not roll up. | `ProducingAgentPolicy` |
 | Sub-cent rounding across five tiers | Each tier rounds independently, so the five can exceed the company dollar by ≤2.5¢. Accepted and bounded rather than corrected by largest-remainder, which would make one agent's payment depend on four others' rounding. | `RevenueShareDistribution` |
-| What downline does the dashboard show? | The *earning* downline. It is built from revenue share awards, so an agent who has been sponsored but has never closed anything appears nowhere. Accurate for the earnings figures, incomplete as an org chart — closing the gap needs an agent-lifecycle event the write side does not yet emit. | `AgentDashboardDocument` |
+| What downline does the dashboard show? | Both populations, separately. `downline` is everyone sponsored at that depth, from `AgentEnrolled`; `contributors` is the subset who have actually earned the agent something. The gap between the counts is the interesting figure — thirty recruited and two producing is a fact neither number states alone. | `AgentDashboardDocument` |
+| Is "contributors" the tier-unlock number? | No, and the dashboard deliberately does not offer one. Unlock needs *producing* frontline — $450 of gross in the trailing six months — which is a policy evaluated against a clock. `contributorCount` is lifetime earning, so an agent who produced two years ago still counts. The read side serves `requiredToUnlock` as plan data and leaves the decision to the write side, where the policy and the clock live. | `AgentDashboardView.Tier` |
+| Does a departure remove someone from a downline? | No. They are marked departed and stay at their depth forever, because the hierarchy does not compress — removing them would assert a tree shape the write side does not have and would contradict awards still arriving through them. | `AgentTerminated` |
 | How long are processed event ids kept? | 30 days, against 7 days of topic retention. An event Kafka can no longer redeliver cannot be a duplicate, so the marker only has to outlive retention. | `ProcessedEventDocument` |
 
 ## Testing
 
 ```bash
-./mvnw verify           # 188 tests
+./mvnw verify           # 235 tests
 ./mvnw -pl domain-core test
 ```
 

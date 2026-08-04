@@ -3,12 +3,16 @@ package com.revshare.reporting.adapter.in.messaging;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.revshare.domain.agent.AgentId;
+import com.revshare.domain.event.AgentEnrolled;
+import com.revshare.domain.event.AgentTerminated;
 import com.revshare.domain.event.CapThresholdReached;
 import com.revshare.domain.event.CommissionCalculated;
 import com.revshare.domain.event.DomainEvent;
 import com.revshare.domain.event.RevenueShareDistributed;
 import com.revshare.domain.revshare.RevenueShareTier;
 import com.revshare.reporting.config.EventDeserializationConfiguration;
+import java.time.LocalDate;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -189,5 +193,78 @@ class DomainEventReaderTest {
         // any projection it maintains, and throwing would stall a partition it can never
         // get past.
         assertThat(parsed).isEmpty();
+    }
+
+    private static final String AGENT_ENROLLED = """
+            {
+              "eventId": "6f1a5b2c-0000-4000-8000-000000000001",
+              "occurredAt": "2025-01-01T00:00:00Z",
+              "agentId": "6f1a5b2c-0000-4000-8000-000000000012",
+              "sponsorshipPath": {
+                "ancestorsNearestFirst": [
+                  "6f1a5b2c-0000-4000-8000-000000000010",
+                  "6f1a5b2c-0000-4000-8000-000000000011"
+                ],
+                "root": false
+              },
+              "joinedOn": "2025-03-14"
+            }
+            """;
+
+    private static final String AGENT_TERMINATED = """
+            {
+              "eventId": "6f1a5b2c-0000-4000-8000-000000000002",
+              "occurredAt": "2025-01-01T00:00:00Z",
+              "agentId": "6f1a5b2c-0000-4000-8000-000000000012",
+              "sponsorshipPath": {
+                "ancestorsNearestFirst": [],
+                "root": true
+              },
+              "terminatedOn": "2025-09-30"
+            }
+            """;
+
+    @Test
+    @DisplayName("the sponsorship path arrives as an ordered list of bare ids, nearest first")
+    void anEnrolmentCarriesTheWholePath() {
+        DomainEvent event = reader.read("AgentEnrolled", AGENT_ENROLLED).orElseThrow();
+
+        assertThat(event).isInstanceOf(AgentEnrolled.class);
+        AgentEnrolled enrolled = (AgentEnrolled) event;
+
+        // Order is the contract, not an incidental detail: index 0 is tier 1. A reader that
+        // treated this as a set would put every ancestor at the wrong depth and pay them the
+        // wrong rate, with nothing to indicate it.
+        assertThat(enrolled.sponsorshipPath().ancestorsNearestFirst())
+                .containsExactly(
+                        AgentId.fromString("6f1a5b2c-0000-4000-8000-000000000010"),
+                        AgentId.fromString("6f1a5b2c-0000-4000-8000-000000000011"));
+        assertThat(enrolled.joinedOn()).isEqualTo(LocalDate.of(2025, 3, 14));
+        assertThat(enrolled.sponsorId()).contains(AgentId.fromString("6f1a5b2c-0000-4000-8000-000000000010"));
+    }
+
+    @Test
+    @DisplayName("an empty path is an agent at the top of a tree, not a missing field")
+    void aTerminationOfAnUnsponsoredAgentParses() {
+        DomainEvent event = reader.read("AgentTerminated", AGENT_TERMINATED).orElseThrow();
+
+        AgentTerminated terminated = (AgentTerminated) event;
+        assertThat(terminated.sponsorshipPath().isRoot()).isTrue();
+        assertThat(terminated.terminatedOn()).isEqualTo(LocalDate.of(2025, 9, 30));
+    }
+
+    @Test
+    @DisplayName("the derived \"root\" flag on the wire is tolerated, not required")
+    void theDerivedRootFlagIsIgnoredOnTheWayIn() {
+        // Jackson picks up SponsorshipPath.isRoot() as a bean getter, so "root" rides along in
+        // every payload the write side emits. It is not a record component and nothing
+        // reconstructs from it — the same way CapProgress.isCapped() already leaks "capped".
+        // Pinned here so the field is a known part of the format rather than a surprise, and
+        // asserted removable so a future write side that stops emitting it breaks nothing.
+        String withoutTheFlag = AGENT_ENROLLED.replace("        \"root\": false\n", "");
+
+        DomainEvent event = reader.read("AgentEnrolled", withoutTheFlag).orElseThrow();
+        assertThat(((AgentEnrolled) event).sponsorshipPath().ancestorsNearestFirst())
+                .hasSize(2);
     }
 }

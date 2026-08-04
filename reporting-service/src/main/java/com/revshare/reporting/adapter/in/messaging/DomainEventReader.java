@@ -1,6 +1,8 @@
 package com.revshare.reporting.adapter.in.messaging;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.revshare.domain.event.AgentEnrolled;
+import com.revshare.domain.event.AgentTerminated;
 import com.revshare.domain.event.CapThresholdReached;
 import com.revshare.domain.event.CommissionCalculated;
 import com.revshare.domain.event.DomainEvent;
@@ -34,7 +36,9 @@ public class DomainEventReader {
             TransactionClosed.class.getSimpleName(), TransactionClosed.class,
             CommissionCalculated.class.getSimpleName(), CommissionCalculated.class,
             CapThresholdReached.class.getSimpleName(), CapThresholdReached.class,
-            RevenueShareDistributed.class.getSimpleName(), RevenueShareDistributed.class);
+            RevenueShareDistributed.class.getSimpleName(), RevenueShareDistributed.class,
+            AgentEnrolled.class.getSimpleName(), AgentEnrolled.class,
+            AgentTerminated.class.getSimpleName(), AgentTerminated.class);
 
     private final ObjectMapper objectMapper;
 

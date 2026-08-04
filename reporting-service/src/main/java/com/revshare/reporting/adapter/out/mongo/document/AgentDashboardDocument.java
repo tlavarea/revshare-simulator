@@ -52,6 +52,7 @@ public class AgentDashboardDocument {
     private CapProgressView capProgress = new CapProgressView();
     private ProductionView production = new ProductionView();
     private RevenueShareView revenueShare = new RevenueShareView();
+    private AffiliationView affiliation = new AffiliationView();
 
     /** When this document was last touched by a projection. Diagnostic, not part of the contract. */
     private Instant lastProjectedAt;
@@ -78,6 +79,10 @@ public class AgentDashboardDocument {
 
     public RevenueShareView getRevenueShare() {
         return revenueShare;
+    }
+
+    public AffiliationView getAffiliation() {
+        return affiliation;
     }
 
     public Instant getLastProjectedAt() {
@@ -240,11 +245,11 @@ public class AgentDashboardDocument {
      * "you earned this much" and "that agent sits this many levels below you". Splitting them into two projections
      * would mean reading the same events twice to build two views that can then disagree.
      *
-     * <p><strong>Consequence worth stating:</strong> the downline here is the <em>earning</em> downline. An agent who
-     * has been sponsored but has never closed anything produces no award and therefore appears nowhere. That is
-     * accurate for the earnings figures and incomplete as an org chart; the roster projection that would fill the gap
-     * needs an agent-lifecycle event the write side does not yet emit. Recorded in the README as a documented
-     * assumption rather than left to be discovered.
+     * <p><strong>Two populations per tier, and the distinction is the point.</strong> Awards give the <em>earning</em>
+     * downline; {@code AgentEnrolled} gives the roster. For a long time only the first existed, which meant an agent
+     * who had been sponsored but had never closed anything produced no award and appeared nowhere — accurate for the
+     * money and wrong as an org chart. Both are kept because neither answers the other's question, and the gap between
+     * their counts is the figure that says whether recruiting turned into income.
      */
     public static class RevenueShareView {
 
@@ -274,6 +279,16 @@ public class AgentDashboardDocument {
             this.totalForfeited = this.totalForfeited.add(forfeited);
             byTier.computeIfAbsent(tier, TierView::new).add(contributorId, awarded, forfeited);
         }
+
+        /** Records a sponsored agent at a tier, from an enrolment rather than from an award. */
+        public void addDownlineMember(String tier, String agentId, LocalDate joinedOn) {
+            byTier.computeIfAbsent(tier, TierView::new).enrolled(agentId, joinedOn);
+        }
+
+        /** Marks a downline member departed, at whichever tier they occupy. */
+        public void markDownlineMemberDeparted(String tier, String agentId, LocalDate terminatedOn) {
+            byTier.computeIfAbsent(tier, TierView::new).departed(agentId, terminatedOn);
+        }
     }
 
     /** One tier's earnings and the agents at that depth. */
@@ -292,8 +307,24 @@ public class AgentDashboardDocument {
          * <p>A set, so the same contributor closing ten deals appears once. Kept as ids only — resolving them to names
          * would mean either duplicating the roster into every ancestor's document or a second query at read time, and
          * neither is worth it before there is a UI asking for it.
+         *
+         * <p>Strictly a subset of {@link #downline}: everyone who has earned this agent something is by definition
+         * sponsored beneath them, but not everyone sponsored beneath them has earned anything.
          */
         private Set<String> contributors = new LinkedHashSet<>();
+
+        /**
+         * Every agent sponsored at this depth, earning or not.
+         *
+         * <p>The org chart, kept beside the earnings rather than replacing them. Both numbers are worth having and
+         * neither substitutes for the other: {@link #contributors} answers "who is paying me", {@code downline} answers
+         * "how many people are under me", and the gap between them is the most interesting figure on the tier — an
+         * agent with thirty in their downline and two contributors has a recruiting record and no income from it.
+         *
+         * <p>Keyed by agent id so a departure can be recorded against an existing member rather than appended as a
+         * second entry. Membership is never removed; see {@link DownlineMember}.
+         */
+        private Map<String, DownlineMember> downline = new LinkedHashMap<>();
 
         protected TierView() {
             // Spring Data materialisation.
@@ -323,10 +354,137 @@ public class AgentDashboardDocument {
             return contributors.size();
         }
 
+        public Map<String, DownlineMember> getDownline() {
+            return downline;
+        }
+
+        public int getDownlineCount() {
+            return downline.size();
+        }
+
+        /** Downline members who have not left. */
+        public int getActiveDownlineCount() {
+            return (int)
+                    downline.values().stream().filter(DownlineMember::isActive).count();
+        }
+
         void add(String contributorId, BigDecimal awarded, BigDecimal forfeited) {
             this.contributors.add(contributorId);
             this.awarded = this.awarded.add(awarded);
             this.forfeited = this.forfeited.add(forfeited);
+
+            // An award is itself proof of membership: it names a contributor at this tier, so
+            // they are in this agent's downline at this depth whether or not an enrolment
+            // event ever said so. Registering them here keeps `contributors` a subset of
+            // `downline` by construction, which matters for the agents who were enrolled
+            // before the write side emitted AgentEnrolled at all - without it their ancestors
+            // would report more contributors than downline and the dashboard would look
+            // broken. The join date stays null, because the award does not carry one and
+            // guessing would be worse than admitting it is unknown.
+            downline.computeIfAbsent(contributorId, DownlineMember::new);
+        }
+
+        /** Records a sponsored agent at this depth, whether or not they have ever produced. */
+        void enrolled(String agentId, LocalDate joinedOn) {
+            downline.computeIfAbsent(agentId, DownlineMember::new).joined(joinedOn);
+        }
+
+        /**
+         * Marks a member departed.
+         *
+         * <p>Marked, never removed — the hierarchy does not compress, so an agent who leaves stays at their depth
+         * forever and everyone beneath them keeps their tier. Removing the entry would misstate the shape of the tree
+         * and, worse, would make the downline count disagree with the awards still arriving through them.
+         *
+         * <p>Creates the entry if it is missing, because a termination can legitimately arrive for an agent this
+         * dashboard never saw enrolled — the read side may have been deployed after they joined.
+         */
+        void departed(String agentId, LocalDate terminatedOn) {
+            downline.computeIfAbsent(agentId, DownlineMember::new).left(terminatedOn);
+        }
+    }
+
+    /**
+     * One agent in someone's downline, and whether they are still here.
+     *
+     * <p>A document rather than a bare id because "is this person still with the brokerage" is the question that makes
+     * a roster useful, and it cannot be answered from a set of ids. Both dates are nullable and their absence is
+     * meaningful: a null {@code joinedOn} means membership was inferred from an award rather than from an enrolment,
+     * and a null {@code terminatedOn} means the agent has not left.
+     */
+    public static class DownlineMember {
+        private String agentId;
+        private LocalDate joinedOn;
+        private LocalDate terminatedOn;
+
+        protected DownlineMember() {
+            // Spring Data materialisation.
+        }
+
+        public DownlineMember(String agentId) {
+            this.agentId = agentId;
+        }
+
+        public String getAgentId() {
+            return agentId;
+        }
+
+        public LocalDate getJoinedOn() {
+            return joinedOn;
+        }
+
+        public LocalDate getTerminatedOn() {
+            return terminatedOn;
+        }
+
+        public boolean isActive() {
+            return terminatedOn == null;
+        }
+
+        void joined(LocalDate on) {
+            this.joinedOn = on;
+        }
+
+        void left(LocalDate on) {
+            this.terminatedOn = on;
+        }
+    }
+
+    /**
+     * The agent's own standing with the brokerage.
+     *
+     * <p>Null until an {@code AgentEnrolled} names them. That is a real distinction and not a gap: a dashboard can
+     * exist without it for an agent this service learned about only from a closing or an award, which is every agent
+     * enrolled before the write side began announcing enrolments.
+     */
+    public static class AffiliationView {
+        private LocalDate joinedOn;
+        private String sponsorId;
+        private LocalDate terminatedOn;
+
+        public LocalDate getJoinedOn() {
+            return joinedOn;
+        }
+
+        public String getSponsorId() {
+            return sponsorId;
+        }
+
+        public LocalDate getTerminatedOn() {
+            return terminatedOn;
+        }
+
+        public boolean isActive() {
+            return terminatedOn == null;
+        }
+
+        public void enrolled(LocalDate joinedOn, String sponsorId) {
+            this.joinedOn = joinedOn;
+            this.sponsorId = sponsorId;
+        }
+
+        public void terminated(LocalDate on) {
+            this.terminatedOn = on;
         }
     }
 }
