@@ -2,13 +2,14 @@
 #
 # A fixed, rehearsed script for showing the domain rules that are easy to get wrong:
 # the anniversary cap year, a closing that straddles the cap, the flat post-cap fee,
-# idempotent replay, and a sponsorship hierarchy that doesn't compress on departure.
+# idempotent replay, forfeiture eligibility, and a sponsorship hierarchy that doesn't
+# compress on departure.
 #
-# All ids, dates and dollar amounts below are fixed on purpose — every figure was
-# checked against CommissionCalculator by hand before being written down here, so
-# what you see when you run this should match the commentary exactly. If you ever
-# regenerate the ids, the cap-straddle and post-cap requests (5 and 6) need
-# their gross commission amounts re-derived; see the comment on each.
+# Every request in this file has been run end to end against real Postgres, Kafka and
+# Mongo containers, and every dollar figure in the comments is copied from an actual
+# response, not hand-derived. If you ever regenerate the ids or change a date, requests
+# 4 through 7 need their numbers re-verified by actually running them — see the comment
+# on each for what depends on what.
 #
 # Setup:
 #   export JAVA_HOME=$(/usr/libexec/java_home -v 21)
@@ -18,6 +19,10 @@
 #
 # Run top to bottom, in order — several requests depend on the state the ones above left behind.
 # Works with the VS Code "REST Client" extension or IntelliJ's built-in HTTP client.
+#
+# If a dashboard GET 404s right after you start reporting-service: a Kafka consumer
+# group can take a few seconds to settle its coordinator election on a freshly started
+# broker. Give it a moment and retry rather than assuming the projection is broken.
 
 @commission = http://localhost:8080
 @reporting = http://localhost:8081
@@ -26,6 +31,7 @@
 @agentB = 4b7756bf-716f-479f-8a9f-1c46449f3163
 @agentC = 282cf72a-ef4c-4ea7-8b79-32c83dcd6f12
 
+@txBPriming = 53253636-fcb2-4f12-be44-03e45d4b5e0f
 @tx1 = 95108d99-b71f-4870-8180-0332679bb4c8
 @tx2 = 310be8fc-cd2d-4b2c-98d8-87486ebf063a
 @tx3 = 28007f9f-b671-4e6b-829c-e8996c86cb3c
@@ -62,10 +68,7 @@ Content-Type: application/json
 
 
 ### 3. Enroll Agent C — sponsored by B, three deep from A
-# A <- B <- C. Closings under C fund revenue share up to B (tier 1) automatically.
-# Tier 2 (A) needs 5 *producing* frontline agents under A to unlock — this 3-agent
-# demo doesn't have that, so A's dashboard later will show C in the downline but
-# never a tier-2 award. Say that out loud before it looks like a bug.
+# A <- B <- C.
 POST {{commission}}/agents
 Content-Type: application/json
 
@@ -79,10 +82,41 @@ Content-Type: application/json
 }
 
 
-### 4. Baseline closing — well under the cap
+### 4. B closes one of their own — makes B a real, producing beneficiary
+# Revenue share only pays a beneficiary who is themselves selling: the Producing Agent
+# Policy needs $450 of gross commission in the trailing six months. Skip this request
+# and B still shows up in every response below, but every award to B comes back
+# forfeited with BENEFICIARY_NOT_PRODUCING — worth doing once on purpose so you can
+# show that failure mode too, but this script shows the paid path.
+#
+# This closing's own revenue share goes up to A (tier 1 relative to B, since B's
+# upline is just A) — and forfeits, because A has never closed anything either:
+# entitlement 250.00, awarded 0.00, forfeitReason BENEFICIARY_NOT_PRODUCING. That's
+# expected, not a second bug to chase.
+POST {{commission}}/transactions
+Content-Type: application/json
+
+{
+  "transactionId": "{{txBPriming}}",
+  "agentId": "{{agentB}}",
+  "closedOn": "2023-05-01",
+  "salePrice": "150000.00",
+  "grossCommissionIncome": "5000.00",
+  "side": "LISTING",
+  "propertyReference": "PROP-DEMO-0001"
+}
+
+
+### 5. Baseline closing for C — well under the cap
 # C's cap year runs 2023-03-15 to 2024-03-14 (their anniversary, not the calendar).
-# Company share = 73333.33 x 15% = 10999.9995, rounds HALF_UP to $11,000.00 —
-# chosen so C's cap balance lands at exactly $1,000 remaining after this one.
+# Company share = 73333.33 x 15% = 10999.9995, rounds HALF_UP to $11,000.00 — chosen
+# so C's cap balance lands at exactly $1,000 remaining after this one.
+#
+# Because B is now producing (request 4, within the trailing six months of this
+# closing), B's tier-1 award actually pays: entitlement 3666.67, awarded 3666.67. A's
+# tier-2 award still forfeits — TIER_LOCKED, not BENEFICIARY_NOT_PRODUCING — because
+# tier 2 needs five producing frontline agents under A, and a 3-agent demo can't
+# supply that. Say that out loud before it looks like a bug.
 POST {{commission}}/transactions
 Content-Type: application/json
 
@@ -93,17 +127,25 @@ Content-Type: application/json
   "salePrice": "950000.00",
   "grossCommissionIncome": "73333.33",
   "side": "LISTING",
-  "propertyReference": "PROP-DEMO-0001"
+  "propertyReference": "PROP-DEMO-0002"
 }
 
 
-### 5. The straddle — $1,000 of cap left, a $20,000 closing arrives
+### 6. The straddle — $1,000 of cap left, a $20,000 closing arrives
 # Normal split would take $3,000 (15%); only $1,000 of cap remains, so the company
 # takes $1,000 and the other $2,000 goes to the agent instead of being carried
-# forward. Watch the response: pricedUnderPostCapFee is false (this one is still
-# priced under the split, not the flat fee — the fee starts on the *next* closing)
-# and reachedCap is true. revenueShareEligibleGross should read ~$6,666.67, not
-# $20,000 — only the pre-cap slice funds the upline.
+# forward. pricedUnderPostCapFee is false (still priced under the split — the fee
+# starts on the *next* closing) and reachedCap is true. revenueShareEligibleGross
+# reads $6,666.67, not $20,000 — only the pre-cap slice funds the upline.
+#
+# The number worth pausing on: B's tier-1 award here is entitlement 333.33, awarded
+# 333.33 — and 3666.67 + 333.33 = $4,000.00 exactly, which is tier 1's annual maximum
+# per contributor, exhausted in the exact closing that caps C. That's not a
+# coincidence: both figures are the same $80,000 of gross-equivalent commission
+# ($73,333.33 + the $6,666.67 pre-cap slice of this one), read through a different
+# rate. See the README's "the numbers are derived, not typed in" section — this is
+# that derivation showing up live. A's forfeited total after this closing will land
+# on exactly $3,200.00 for the identical reason, on tier 2's 4% instead.
 POST {{commission}}/transactions
 Content-Type: application/json
 
@@ -114,16 +156,16 @@ Content-Type: application/json
   "salePrice": "260000.00",
   "grossCommissionIncome": "20000.00",
   "side": "DUAL",
-  "propertyReference": "PROP-DEMO-0002"
+  "propertyReference": "PROP-DEMO-0003"
 }
 
 
-### 6. Post-cap — the flat fee kicks in
-# C capped on the closing above, so this one skips the split entirely: a flat
-# $285 (non-Elite) instead of 15%. capContribution is $0 and, because none of
-# this gross produced company dollar, revenueShareEligibleGross is $0 too — expect
-# an empty or all-forfeited awards list. That emptiness is the rule working, not
-# a broken request.
+### 7. Post-cap — the flat fee kicks in
+# C capped on the closing above, so this one skips the split entirely: a flat $285
+# (non-Elite) instead of 15%. capContribution is $0 and, because none of this gross
+# produced company dollar, revenueShareEligibleGross is $0 — the awards list comes
+# back genuinely empty, not present-and-forfeited. RevenueShareCalculator short-
+# circuits before evaluating any beneficiary when there's nothing to distribute.
 POST {{commission}}/transactions
 Content-Type: application/json
 
@@ -134,15 +176,15 @@ Content-Type: application/json
   "salePrice": "195000.00",
   "grossCommissionIncome": "15000.00",
   "side": "BUYING",
-  "propertyReference": "PROP-DEMO-0003"
+  "propertyReference": "PROP-DEMO-0004"
 }
 
 
-### 7. Replay the straddle closing — identical body, same transaction id
-# 200, not 201 — the status line alone says "this already happened" without
-# parsing the body. revenueShare is null in the response, not a zeroed block:
-# the replay path never re-reads the ledger, so it genuinely does not know who
-# was paid, and reporting a zero would misstate that as a fact.
+### 8. Replay the straddle closing — identical body, same transaction id
+# 200, not 201 — the status line alone says "this already happened" without parsing
+# the body. revenueShare is null in the response, not a zeroed block: the replay path
+# never re-reads the ledger, so it genuinely does not know who was paid, and
+# reporting a zero would misstate that as a fact.
 POST {{commission}}/transactions
 Content-Type: application/json
 
@@ -153,13 +195,13 @@ Content-Type: application/json
   "salePrice": "260000.00",
   "grossCommissionIncome": "20000.00",
   "side": "DUAL",
-  "propertyReference": "PROP-DEMO-0002"
+  "propertyReference": "PROP-DEMO-0003"
 }
 
 
-### 8. Terminate B — the mid-chain departure
-# B has both an upline (A) and a downline (C) at the moment they leave. Nothing
-# is deleted: POST .../termination, not DELETE.
+### 9. Terminate B — the mid-chain departure
+# B has both an upline (A) and a downline (C) at the moment they leave. Nothing is
+# deleted: POST .../termination, not DELETE.
 POST {{commission}}/agents/{{agentB}}/termination
 Content-Type: application/json
 
@@ -168,28 +210,39 @@ Content-Type: application/json
 }
 
 
-### 9. Dashboard for A — the hierarchy does not compress
+### 10. Dashboard for A — the hierarchy does not compress
 # The moment worth narrating slowly. C stays at tier 2 beneath A, not promoted to
 # tier 1 now that B is gone — a naive live-parent-pointer implementation would
-# promote C here and pay A the 5% rate instead of the correct 4%. B still shows
-# in A's tier 1, marked departed, not removed. Also look at the gap between
-# `downline` and `contributors` on each tier: recruited versus actually earning.
+# promote C here and pay A the 5% rate instead of the correct 4%. B still shows in
+# A's tier 1, marked departed, not removed. A's totalForfeited reads $3,450.00:
+# $250.00 from B's own closing (request 4) plus the $3,200.00 tier-2 lock described
+# above — every dollar accounted for, none of it paid, all of it explained.
 GET {{reporting}}/agents/{{agentA}}/dashboard
 
 
-### 10. Dashboard for C — cap progress and production, from the read side
-# Confirms the write side's numbers made it through the outbox -> Kafka ->
-# projection pipeline: cap progress against the 2023-03-15 anniversary window,
-# and production totals from all three closings.
+### 11. Dashboard for B — a departed agent's earnings are still exactly right
+# affiliation.active is false, but revenueShare.totalAwarded reads $4,000.00 —
+# tier 1's derived annual maximum, earned before B left and never touched by the
+# termination that came after. Nothing here gets deleted or zeroed on departure;
+# only the ability to earn *new* awards stops.
+GET {{reporting}}/agents/{{agentB}}/dashboard
+
+
+### 12. Dashboard for C — cap progress and production, from the read side
+# Confirms the write side's numbers made it through the outbox -> Kafka -> projection
+# pipeline: cap progress against the 2023-03-15 anniversary window, capped and
+# cappedOn 2023-07-15, and production totals from all three closings
+# ($108,333.33 gross, $96,048.33 to the agent, $12,000.00 to the company, $285.00 in
+# post-cap fees).
 GET {{reporting}}/agents/{{agentC}}/dashboard
 
 
 ### --- Bonus: edge cases worth having queued up if there's time left ---
 
-### 11. Re-enroll Agent A — 409, not an idempotent replay
+### 13. Re-enroll Agent A — 409, not an idempotent replay
 # Unlike a closing, an enrolment carries a name and email that might differ from
-# what's stored — silently accepting a repeat would risk overwriting a real
-# record from what only looks like a retry.
+# what's stored — silently accepting a repeat would risk overwriting a real record
+# from what only looks like a retry.
 POST {{commission}}/agents
 Content-Type: application/json
 
@@ -202,7 +255,7 @@ Content-Type: application/json
 }
 
 
-### 12. Terminate B again — 409, the aggregate refuses a second departure date
+### 14. Terminate B again — 409, the aggregate refuses a second departure date
 POST {{commission}}/agents/{{agentB}}/termination
 Content-Type: application/json
 
@@ -211,7 +264,7 @@ Content-Type: application/json
 }
 
 
-### 13. Malformed closing — 400, not a 500
+### 15. Malformed closing — 400, not a 500
 # grossCommissionIncome is missing entirely. This is a request-shape problem
 # (presence), handled by validation on the request DTO — distinct from a
 # business-rule rejection like gross exceeding sale price, which is enforced by
@@ -225,12 +278,12 @@ Content-Type: application/json
   "closedOn": "2023-09-15",
   "salePrice": "195000.00",
   "side": "BUYING",
-  "propertyReference": "PROP-DEMO-0004"
+  "propertyReference": "PROP-DEMO-0005"
 }
 
 
-### 14. Dashboard for an agent nobody ever enrolled — 404, not an empty 200
-# An empty dashboard would assert zero production as fact. 404 says "no such
-# agent" instead, which is genuinely true only because AgentEnrolled exists —
-# an agent enrolled but never producing gets a real, zeroed dashboard, not this.
+### 16. Dashboard for an agent nobody ever enrolled — 404, not an empty 200
+# An empty dashboard would assert zero production as fact. 404 says "no such agent"
+# instead, which is genuinely true only because AgentEnrolled exists — an agent
+# enrolled but never producing gets a real, zeroed dashboard, not this.
 GET {{reporting}}/agents/00000000-0000-0000-0000-000000000000/dashboard
