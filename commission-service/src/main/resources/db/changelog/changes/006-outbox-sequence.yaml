@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: 006-outbox-sequence
+      author: revshare
+      comment: >
+        Adds a true insertion-order tiebreaker to the outbox.
+
+        The relay's claim query ordered by occurred_at alone, on the assumption that it was
+        enough to preserve per-aggregate causality. It is not: every event a single closing
+        emits shares one Instant (RecordClosedTransactionService.eventsFor captures `now`
+        once and reuses it), and created_at is Postgres's transaction-start now(), which is
+        also identical across every insert in that same transaction. So the two timestamp
+        columns tie on exactly the rows whose relative order matters most — a commission
+        event and the cap-threshold event it triggered — and ORDER BY over tied values has no
+        guaranteed result. sequence_number is populated from a real Postgres identity
+        sequence, assigned at insert time, so two rows written in the same transaction are
+        always distinguishable by it even when every timestamp they carry is identical.
+      changes:
+        - sql:
+            comment: >
+              GENERATED ALWAYS AS IDENTITY rather than a default expression: it cannot be
+              overridden by an explicit INSERT, which matters here because nothing about this
+              column should ever be caller-assigned the way occurred_at and id are.
+            sql: >
+              ALTER TABLE outbox ADD COLUMN sequence_number bigint GENERATED ALWAYS AS IDENTITY
+            rollback: ALTER TABLE outbox DROP COLUMN sequence_number
+
+        # Replaces ix_outbox_unpublished rather than adding beside it: both queries now sort
+        # by (occurred_at, sequence_number), and a second single-column index would only be
+        # dead weight the planner never chooses over this one.
+        - sql:
+            comment: Partial index over the unpublished backlog, extended with the tiebreaker
+            sql: >
+              DROP INDEX ix_outbox_unpublished;
+              CREATE INDEX ix_outbox_unpublished ON outbox (occurred_at, sequence_number)
+              WHERE published_at IS NULL
+            rollback: >
+              DROP INDEX ix_outbox_unpublished;
+              CREATE INDEX ix_outbox_unpublished ON outbox (occurred_at) WHERE published_at IS NULL

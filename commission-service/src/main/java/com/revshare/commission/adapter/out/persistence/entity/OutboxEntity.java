@@ -61,6 +61,15 @@ public class OutboxEntity implements Persistable<UUID> {
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * A Postgres identity sequence value, assigned at insert time — never {@code occurredAt}. Every event one closing
+     * emits shares a single {@code Instant}, and {@code created_at} is frozen for the whole transaction, so neither
+     * timestamp can tell two same-closing events apart. This can. {@code insertable = false} because it is
+     * database-generated, the same reason {@code createdAt} is.
+     */
+    @Column(name = "sequence_number", nullable = false, insertable = false, updatable = false)
+    private long sequenceNumber;
+
     /** Null until the relay has published it. Rows are marked, never deleted. */
     @Column(name = "published_at")
     private Instant publishedAt;
@@ -128,6 +137,10 @@ public class OutboxEntity implements Persistable<UUID> {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public long getSequenceNumber() {
+        return sequenceNumber;
     }
 
     public Instant getPublishedAt() {

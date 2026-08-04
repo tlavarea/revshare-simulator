@@ -9,3 +9,5 @@ databaseChangeLog:
       file: db/changelog/changes/004-revenue-share-award.yaml
   - include:
       file: db/changelog/changes/005-outbox.yaml
+  - include:
+      file: db/changelog/changes/006-outbox-sequence.yaml
