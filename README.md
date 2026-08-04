@@ -22,7 +22,7 @@ of it leaving the company.
 | `domain-core` | Complete. Framework-free hexagonal core, 74 unit tests. |
 | `seed-generator` | Complete. Deterministic synthetic data, CLI, 19 tests. |
 | `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, 27 Testcontainers integration tests. REST still to come. |
-| `reporting-service` | Read side. Kafka consumer, MongoDB projections, transactional idempotent fold, 32 tests. Query API still to come. |
+| `reporting-service` | Read side. Kafka consumer, MongoDB projections, transactional idempotent fold, and a read-only dashboard API. 46 tests. |
 
 ## Quick start
 
@@ -148,6 +148,14 @@ The root POM *imports* the `spring-boot-dependencies` BOM rather than inheriting
 `spring-boot-starter-parent`, so modules get consistent versions without the parent's plugin
 bindings reaching the core.
 
+That choice has a bill, and it is paid in small print rather than in architecture. Whatever the
+parent would have configured has to be configured by hand, and the failure mode is a long way
+from the cause: the parent sets `-parameters`, and without it Spring cannot infer the name of a
+`@PathVariable String agentId` and fails *at request time*, in the web layer only, with
+`Name for argument of type [java.lang.String] not specified`. It is set at the reactor level in
+the root POM, with a comment, because the same flag governs `@RequestParam`,
+`@ConfigurationProperties` constructor binding and Jackson's non-record constructor binding.
+
 ### Both calculators are pure functions
 
 `CommissionCalculator` and `RevenueShareCalculator` take no ports, no repositories and no
@@ -216,6 +224,32 @@ already done. Multi-document transactions require a replica set even on a single
 `MongoTransactionManager` is also not auto-configured by Spring Boot — without the bean,
 `@Transactional` on a Mongo call is *silently* a no-op, which is the failure this project has a
 dedicated test for (`ProjectionAtomicityIT`, watched failing with the bean removed).
+
+### Reading it back
+
+```
+GET /agents/{agentId}/dashboard
+```
+
+One endpoint, one primary key lookup, no aggregation — which is the whole return on the work the
+projector does on write. The response carries cap progress against the anniversary window,
+production totals, and revenue share earnings with **all five tiers always present**, because a
+client rendering a five-tier programme should not have to know that five is the number or treat
+an absent key differently from a zero.
+
+The service is read-only by construction, not by omission. State changes by publishing a closing
+to `commission-service`; a mutating endpoint here would be a second way into the system with no
+cap arithmetic behind it. A missing agent is a 404 rather than an empty 200 — this service learns
+about agents only from events, so it genuinely cannot distinguish "no such agent" from "an agent
+nothing has happened to", and an empty dashboard would assert zero production as fact.
+
+**Adding the web starter armed a trap the write side had already named in a comment.** Boot's
+`ObjectMapper` is `@Primary` *and* `@ConditionalOnMissingBean`; because `eventObjectMapper`
+already existed, Boot backed off entirely, leaving *no* primary mapper and the event mapper as
+the only candidate for serialising every HTTP response. Nothing would have looked wrong that day
+— it is the next API-motivated Jackson tweak that would have silently changed the format of every
+event, with old and new shapes interleaved in one outbox table. `SerializationBoundaryIT` is the
+guard, also watched failing.
 
 ## The seed generator
 
@@ -305,15 +339,17 @@ read as decisions rather than oversights:
 ## Testing
 
 ```bash
-./mvnw verify           # 152 tests
+./mvnw verify           # 166 tests
 ./mvnw -pl domain-core test
 ```
 
 - **JUnit 5 + AssertJ**, no mocking framework in the domain — the pure calculators do not
   need one.
-- **One mock in the whole repository**, in `ProjectionAtomicityIT`, and the reason is stated
-  where it lives: a mid-transaction infrastructure failure is not something a real database can
-  be asked for on cue. Everything else runs against real Postgres, real Mongo and a real broker.
+- **Two mocks in the whole repository**, each justified where it lives: `ProjectionAtomicityIT`,
+  because a mid-transaction infrastructure failure cannot be requested from a real database on
+  cue, and `AgentDashboardControllerTest`, a `@WebMvcTest` slice where routing and JSON shape
+  really are all that is under test. Everything else runs against real Postgres, real Mongo and
+  a real broker.
 - **Testcontainers** for `commission-service`, against a real Postgres rather than H2: the
   `uuid[]` sponsorship path, the partial index on the outbox, `jsonb` payloads and every
   `CHECK` constraint only exist there. `CapProgressConcurrencyIT` races real threads through

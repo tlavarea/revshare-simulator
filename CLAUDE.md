@@ -130,9 +130,11 @@ the service modules get built:
 - Testcontainers for the service modules — real Postgres, real Mongo, a real broker. Not H2, not
   an embedded Mongo: the things worth testing (`uuid[]`, `jsonb`, partial indices, `Decimal128`,
   multi-document transactions) only exist in the real servers.
-- **There is exactly one mock in the repository**, in `ProjectionAtomicityIT`, because a
-  mid-transaction infrastructure failure cannot be requested from a real database on cue. Before
-  adding a second, check the dependency does not belong in an argument instead.
+- **There are exactly two mocks in the repository**, and both have their justification written
+  where they live: `ProjectionAtomicityIT` (a mid-transaction infrastructure failure cannot be
+  requested from a real database on cue) and `AgentDashboardControllerTest` (a `@WebMvcTest`
+  slice, where routing and JSON shape really are all that is under test). Before adding a third,
+  check the dependency does not belong in an argument instead.
 - **A test for something that is silently optional must be watched failing.** Both
   `ProjectionAtomicityIT` and the write side's concurrency test assert behaviour that would
   quietly not happen if a bean were missing; a green test proves nothing there unless the red
