@@ -1,0 +1,25 @@
+# Test-only overrides, applied to every integration test.
+spring:
+  kafka:
+    consumer:
+      # A short poll keeps the await() in the stream tests from spending its budget waiting on
+      # a fetch that has nothing to do.
+      fetch-max-wait: 100ms
+    listener:
+      # Fail fast instead of the default retry-with-backoff. A projection error in a test is a
+      # bug in the projection, and retrying it for thirty seconds only delays the report.
+      missing-topics-fatal: false
+      # Most integration tests need Mongo and no broker. Left on, the listener container would
+      # start against the default localhost:9092 and fill the log with reconnect attempts that
+      # look like failures and are not. AbstractStreamIT turns it back on, so the consumer is
+      # still exercised for real wherever a broker actually exists.
+      auto-startup: false
+
+logging:
+  level:
+    # The projector logs a line per skipped duplicate; the idempotency test relies on that
+    # path being taken, and seeing it is the difference between "no double count" and "the
+    # event never arrived".
+    com.revshare.reporting.service: DEBUG
+    org.apache.kafka.clients.consumer: WARN
+    org.apache.kafka.clients.NetworkClient: ERROR

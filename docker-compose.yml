@@ -30,15 +30,29 @@ services:
     container_name: revshare-mongodb
     environment:
       MONGO_INITDB_DATABASE: revshare_read
+    # Single node, but a replica set all the same. Mongo offers no multi-document transactions
+    # on a standalone server, and reporting-service needs them: it marks an event processed and
+    # folds it into up to five dashboards, and those have to commit together or the read model
+    # double-counts on the next redelivery. Testcontainers' MongoDBContainer does the same thing
+    # for the integration tests, so development and test agree.
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+    # Initiates the set on the first check, then reports health on every one after. Doing it
+    # here rather than in a separate init container keeps `docker compose up -d` a single
+    # command that produces a usable database.
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      test: >
+        mongosh --quiet --eval "
+          try { rs.status().ok }
+          catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }
+        "
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 15
+      start_period: 10s
 
   # KRaft mode, so there is no ZooKeeper to run alongside it.
   kafka:
