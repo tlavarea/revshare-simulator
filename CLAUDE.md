@@ -21,8 +21,9 @@ Modules:
   enforced by the build. See `domain-core/CLAUDE.md`.
 - **`seed-generator/`** — deterministic synthetic data. See `seed-generator/CLAUDE.md`.
 - **`commission-service/`** — the write side: Postgres, JPA, and a transactional outbox relayed
-  to Kafka by `OutboxRelay`. No REST layer yet.
-- **`reporting-service/`** — not yet written. Read side: Kafka consumer, MongoDB projections.
+  to Kafka by `OutboxRelay`. No REST layer yet. See `commission-service/CLAUDE.md`.
+- **`reporting-service/`** — the read side: Kafka consumer folding the event stream into MongoDB
+  dashboards. No query API yet. See `reporting-service/CLAUDE.md`.
 
 `README.md` is the reviewer-facing document and carries the full domain explanation, the
 architecture diagram, and the table of documented assumptions. **When a business rule or an
@@ -126,7 +127,16 @@ the service modules get built:
 - **Pin rounding behaviour explicitly.** Where accumulated rounding drift is real, assert the
   *bound* and explain the mechanism rather than tuning inputs until the number looks exact.
   There are three such tests already; match their style.
-- Testcontainers for the service modules' integration tests, once those exist.
+- Testcontainers for the service modules — real Postgres, real Mongo, a real broker. Not H2, not
+  an embedded Mongo: the things worth testing (`uuid[]`, `jsonb`, partial indices, `Decimal128`,
+  multi-document transactions) only exist in the real servers.
+- **There is exactly one mock in the repository**, in `ProjectionAtomicityIT`, because a
+  mid-transaction infrastructure failure cannot be requested from a real database on cue. Before
+  adding a second, check the dependency does not belong in an argument instead.
+- **A test for something that is silently optional must be watched failing.** Both
+  `ProjectionAtomicityIT` and the write side's concurrency test assert behaviour that would
+  quietly not happen if a bean were missing; a green test proves nothing there unless the red
+  version was seen first. Say so in the Javadoc when you do it.
 
 ## CI
 

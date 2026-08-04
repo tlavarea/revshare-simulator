@@ -30,6 +30,7 @@
     <module>domain-core</module>
     <module>seed-generator</module>
     <module>commission-service</module>
+    <module>reporting-service</module>
   </modules>
 
   <properties>

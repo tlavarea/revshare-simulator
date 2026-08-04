@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: reporting-service
+
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://localhost:27017/revshare_read}
+      database: ${MONGO_DATABASE:revshare_read}
+      # Read-your-writes for the projector. It loads a dashboard, folds an event into it and
+      # writes it back, so a read served from a lagging secondary would silently drop whatever
+      # the previous event added.
+      read-preference: primary
+      # Index creation is off by default in Spring Data 4 and turning it on is what creates
+      # the TTL index on processed_event. There are two indexes in this module, both tiny;
+      # for a schema this size auto-creation is worth more than the control of doing it by
+      # hand, and the alternative is a migration tool for two lines of configuration.
+      auto-index-creation: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      # The relay publishes an already-serialized JSON string with a string key; the payload
+      # is parsed by eventObjectMapper once the event-type header has said what it is, so
+      # nothing here should try to interpret it.
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Start from the beginning of the log for a group that has never committed. A read model
+      # is a fold over the whole stream, so a fresh consumer must see history rather than only
+      # what arrives after it starts - "latest" would leave every dashboard permanently missing
+      # everything that happened before the service was first deployed.
+      auto-offset-reset: earliest
+      # Offsets are committed by the container after the listener returns, not by the broker on
+      # a timer. Auto-commit would acknowledge records that had been polled but not yet
+      # projected, so a crash would skip them.
+      enable-auto-commit: false
+      max-poll-records: 100
+    listener:
+      ack-mode: batch
+      # One thread per listener. Ordering within a partition is the guarantee the cap
+      # projection depends on, and concurrency above the partition count buys nothing anyway.
+      concurrency: 1
+
+revshare:
+  reporting:
+    consumer-group: reporting-service
+
+logging:
+  level:
+    com.revshare: INFO

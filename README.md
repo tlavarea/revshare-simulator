@@ -22,7 +22,7 @@ of it leaving the company.
 | `domain-core` | Complete. Framework-free hexagonal core, 74 unit tests. |
 | `seed-generator` | Complete. Deterministic synthetic data, CLI, 19 tests. |
 | `commission-service` | Write side. Postgres + JPA/Hibernate 6, Liquibase, transactional outbox with a Kafka relay, 27 Testcontainers integration tests. REST still to come. |
-| `reporting-service` | Not started. Read side: Kafka consumer, MongoDB projections. |
+| `reporting-service` | Read side. Kafka consumer, MongoDB projections, transactional idempotent fold, 32 tests. Query API still to come. |
 
 ## Quick start
 
@@ -203,6 +203,20 @@ changes, and expensive to assemble from the normalised write model — a recursi
 dashboard load. Projecting it once into a document and serving it whole is the case where a
 document store earns its place, as opposed to being a cache with extra steps.
 
+The revenue share events make the point sharper than the hierarchy does. They are partitioned
+by the *contributing* agent, because the annual tier maxima are drawn down per contributor and
+those draws must stay ordered. So a beneficiary's earnings arrive spread across every partition
+their downline happens to land on, and are only ever assembled in the document. There is no
+ordered per-beneficiary stream to read instead.
+
+**The read store is a replica set, and that is not decoration.** Projecting one revenue share
+event marks it processed and folds it into up to five dashboards; those have to commit together
+or a crash part-way leaves some updated, some not, and the redelivery double-pays the ones
+already done. Multi-document transactions require a replica set even on a single node.
+`MongoTransactionManager` is also not auto-configured by Spring Boot — without the bean,
+`@Transactional` on a Mongo call is *silently* a no-op, which is the failure this project has a
+dedicated test for (`ProjectionAtomicityIT`, watched failing with the bean removed).
+
 ## The seed generator
 
 Produces a complete synthetic brokerage: an agent roster, a sponsorship tree, and a
@@ -285,16 +299,21 @@ read as decisions rather than oversights:
 | What does "production" mean in the $450 policy? | Gross commission income from closings in the window — the only measure independent of cap status. | `ProducingAgentPolicy` |
 | Where do forfeited amounts go? | They stay with the company; they do not roll up. | `ProducingAgentPolicy` |
 | Sub-cent rounding across five tiers | Each tier rounds independently, so the five can exceed the company dollar by ≤2.5¢. Accepted and bounded rather than corrected by largest-remainder, which would make one agent's payment depend on four others' rounding. | `RevenueShareDistribution` |
+| What downline does the dashboard show? | The *earning* downline. It is built from revenue share awards, so an agent who has been sponsored but has never closed anything appears nowhere. Accurate for the earnings figures, incomplete as an org chart — closing the gap needs an agent-lifecycle event the write side does not yet emit. | `AgentDashboardDocument` |
+| How long are processed event ids kept? | 30 days, against 7 days of topic retention. An event Kafka can no longer redeliver cannot be a duplicate, so the marker only has to outlive retention. | `ProcessedEventDocument` |
 
 ## Testing
 
 ```bash
-./mvnw verify           # 120 tests
+./mvnw verify           # 152 tests
 ./mvnw -pl domain-core test
 ```
 
 - **JUnit 5 + AssertJ**, no mocking framework in the domain — the pure calculators do not
   need one.
+- **One mock in the whole repository**, in `ProjectionAtomicityIT`, and the reason is stated
+  where it lives: a mid-transaction infrastructure failure is not something a real database can
+  be asked for on cue. Everything else runs against real Postgres, real Mongo and a real broker.
 - **Testcontainers** for `commission-service`, against a real Postgres rather than H2: the
   `uuid[]` sponsorship path, the partial index on the outbox, `jsonb` payloads and every
   `CHECK` constraint only exist there. `CapProgressConcurrencyIT` races real threads through
